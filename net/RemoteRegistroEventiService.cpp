@@ -246,6 +246,9 @@ void RemoteRegistroEventiService::setLocationCode(const char* code) {
   copyBounded(code, _locationCode, sizeof(_locationCode));
   _lastHandledRequestId = 0;
   _lastHandledRequestSignature[0] = '\0';
+  _pendingAppliedRequestSignature[0] = '\0';
+  _pendingAppliedRequestOk = false;
+  _pendingAppliedResponseMessage[0] = '\0';
   _requestState = REQUEST_STATE_IDLE;
   updateActiveFlag();
 }
@@ -297,6 +300,9 @@ bool RemoteRegistroEventiService::begin() {
   _requestState = REQUEST_STATE_IDLE;
   _lastHandledRequestId = 0;
   _lastHandledRequestSignature[0] = '\0';
+  _pendingAppliedRequestSignature[0] = '\0';
+  _pendingAppliedRequestOk = false;
+  _pendingAppliedResponseMessage[0] = '\0';
 
   updateActiveFlag();
   if (!_active) {
@@ -776,23 +782,25 @@ void RemoteRegistroEventiService::loop() {
 
   if (request.requestId == 0) {
     _requestState = REQUEST_STATE_IDLE;
+    _pendingAppliedRequestSignature[0] = '\0';
+    _pendingAppliedRequestOk = false;
+    _pendingAppliedResponseMessage[0] = '\0';
     return;
   }
 
   char signature[sizeof(_lastHandledRequestSignature)] = {0};
   buildRequestSignature(request, signature, sizeof(signature));
-  if (_lastHandledRequestSignature[0] != '\0' &&
-      strcmp(signature, _lastHandledRequestSignature) == 0) {
-    _requestState = REQUEST_STATE_RESPONSE_POSTED;
-    return;
-  }
 
   _requestState = REQUEST_STATE_REQUEST_SEEN;
   _lastAttemptMs = now;
 
   String applyMessage;
   bool applyOk = true;
-  if (_requestApplyHook) {
+  if (_pendingAppliedRequestSignature[0] != '\0' &&
+      strcmp(signature, _pendingAppliedRequestSignature) == 0) {
+    applyOk = _pendingAppliedRequestOk;
+    applyMessage = _pendingAppliedResponseMessage;
+  } else if (_requestApplyHook) {
     applyOk = _requestApplyHook(request.command,
                                 request.requestPayload,
                                 applyMessage,
@@ -803,12 +811,18 @@ void RemoteRegistroEventiService::loop() {
     applyOk = false;
     applyMessage = "nessun gestore richieste configurato";
   }
+  copyBounded(signature, _pendingAppliedRequestSignature, sizeof(_pendingAppliedRequestSignature));
+  _pendingAppliedRequestOk = applyOk;
+  copyBounded(applyMessage, _pendingAppliedResponseMessage, sizeof(_pendingAppliedResponseMessage));
 
   String serverMessage;
   if (postResponse(request, applyOk, applyMessage.c_str(), &serverMessage)) {
     _successCount++;
     _lastHandledRequestId = request.requestId;
     copyBounded(signature, _lastHandledRequestSignature, sizeof(_lastHandledRequestSignature));
+    _pendingAppliedRequestSignature[0] = '\0';
+    _pendingAppliedRequestOk = false;
+    _pendingAppliedResponseMessage[0] = '\0';
     _requestState = REQUEST_STATE_RESPONSE_POSTED;
 
     char line[256] = {0};

@@ -146,6 +146,9 @@ private:
   RequestProtocolState _requestState = REQUEST_STATE_IDLE;
   uint32_t _lastHandledRequestId = 0;
   char _lastHandledRequestSignature[384] = {0};
+  char _pendingAppliedRequestSignature[384] = {0};
+  bool _pendingAppliedRequestOk = false;
+  char _pendingAppliedResponseMessage[160] = {0};
 
   LogHook _logHook = nullptr;
   void* _logHookUserData = nullptr;

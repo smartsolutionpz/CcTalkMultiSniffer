@@ -14,8 +14,7 @@
 namespace ccms {
 
 // Servizio di connettivita Wi-Fi non bloccante.
-// In RUN tenta la connessione station verso la rete salvata e abilita AP
-// fallback se la rete non e raggiungibile.
+// In RUN tenta la connessione station verso la rete salvata.
 // In PROG espone l'access point locale per la configurazione.
 class WifiService {
 public:
@@ -46,7 +45,7 @@ public:
   void setTimings(uint32_t connectTimeoutMs, uint32_t retryIntervalMs);
 
   // Bootstrap nelle due modalita principali.
-  // `begin()` = RUN, station verso la rete salvata con AP fallback automatico.
+  // `begin()` = RUN, station verso la rete salvata.
   // `beginApOnly()` = PROG, AP locale attivato esplicitamente al boot.
   bool begin();
   bool beginApOnly();
@@ -68,6 +67,7 @@ public:
   uint8_t scanNetworks(ScannedNetwork* out, uint8_t maxCount);
   void reconnect();
   bool getClockInfo(ClockInfo& out) const;
+  void noteDisconnectReason(uint16_t reason);
 
   void setLogHook(LogHook hook, void* userData);
 
@@ -76,10 +76,13 @@ public:
 private:
   void resetRadioStackForStart();
   void applyRadioStabilitySettings();
+  void attachWifiEvents();
+  void logPendingDisconnectReason();
   // Avvia un tentativo di connessione STA mantenendo, se necessario, l'AP attivo.
   void startConnectAttempt();
   // Attiva l'access point locale di modalita PROG.
   void startApFallback();
+  void stopApFallbackIfNotNeeded();
   void requestClockSync();
   void logLine(const char* line);
   void logConnectedInfo();
@@ -99,9 +102,12 @@ private:
   bool _apFallbackActive = false;
   bool _clockSyncRequested = false;
   bool _clockSyncedFromInternet = false;
+  bool _eventsAttached = false;
   uint32_t _attemptStartMs = 0;
   uint32_t _lastAttemptMs = 0;
   uint32_t _lastClockSyncRequestMs = 0;
+  volatile uint16_t _lastDisconnectReason = 0;
+  volatile bool _disconnectReasonPending = false;
 
   LogHook _logHook = nullptr;
   void* _logHookUserData = nullptr;

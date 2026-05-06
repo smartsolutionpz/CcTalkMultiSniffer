@@ -369,6 +369,7 @@ static void enterRunMode();
 static void loadAppSettings();
 static void selectDeviceModelsFromSettings();
 static void normalizeDeviceModelSettings(ccms::AppSettings& settings);
+static void normalizeCounterRoutingSettings(ccms::AppSettings& settings);
 static void applyConfiguredHopperCoinValues(const ccms::AppSettings& settings);
 static const char* hopperModelLabel(uint8_t model);
 static const char* billValidatorModelLabel(uint8_t model);
@@ -402,7 +403,6 @@ static void runAuxTask(void* userData);
 static void startRuntimeTasks();
 #endif
 
-namespace {
 static const uint32_t kWebTestWifiTimeoutMs = 15000;
 static const uint16_t kWebTestHttpTimeoutMs = 8000;
 
@@ -563,9 +563,7 @@ bool testDatabaseViaRemoteEndpoint(const ccms::AppSettings& settings, String& me
   }
   return false;
 }
-} // namespace
 
-namespace {
 #if defined(ARDUINO_ARCH_ESP32)
 inline void lockFramDirtyState() { portENTER_CRITICAL(&g_framDirtyMux); }
 inline void unlockFramDirtyState() { portEXIT_CRITICAL(&g_framDirtyMux); }
@@ -628,7 +626,6 @@ bool clearFramDirtyIfGenerationUnchanged(uint32_t expectedGeneration) {
 #endif
   return cleared;
 }
-} // namespace
 
 static void onWifiLog(const char* line, void* user) {
   (void)user;
@@ -706,6 +703,9 @@ static void requestBootModeRestart(BootMode targetMode, const char* reason) {
     }
     g_remoteRegistro.setEnabled(true);
     g_remoteRegistro.begin();
+    if (!appconfig::REMOTE_DB_AUTO_POLL_ENABLED) {
+      logRuntimeLine("[REMOTE_DB] polling automatico disabilitato", true);
+    }
   }
 
   g_wifiStableSinceMs = 0;
@@ -2965,7 +2965,7 @@ static void initTelemetryAndMeshServices() {
   g_remoteRegistro.setLogHook(onServiceLog, nullptr);
   g_remoteRegistro.setRequestApplyHook(onRemoteMasterRequest, nullptr);
   g_remoteRegistro.setRequestTimeoutMs(appconfig::REMOTE_DB_HTTP_TIMEOUT_MS);
-  g_remoteRegistro.setRetryIntervalMs(5000);
+  g_remoteRegistro.setRetryIntervalMs(appconfig::REMOTE_DB_RETRY_INTERVAL_MS);
   g_remoteRegistro.setDbPollIntervalMs(appconfig::REMOTE_DB_POLL_INTERVAL_MS);
 
   g_mesh.setLogHook(onServiceLog, nullptr);
@@ -2984,6 +2984,9 @@ static void initTelemetryAndMeshServices() {
   }
   g_remoteRegistro.setEnabled(true);
   g_remoteRegistro.begin();
+  if (!appconfig::REMOTE_DB_AUTO_POLL_ENABLED) {
+    logRuntimeLine("[REMOTE_DB] polling automatico disabilitato", true);
+  }
   g_mesh.begin(appconfig::MESH_ENABLED);
 }
 
@@ -3042,7 +3045,7 @@ static void initCcTalkSniffer() {
   g_router.add(&g_billValidatorSmartPayout);
 
   // Configurazione fisica dello sniffer UART ccTalk.
-#if CONFIG_IDF_TARGET_ESP32C3
+#if CONFIG_IDF_TARGET_ESP32C3 || CONFIG_IDF_TARGET_ESP32C6
   cfg.port = &Serial1;
 #else
   cfg.port = &Serial2;
@@ -3092,15 +3095,15 @@ static void serviceAuxOnce() {
   // fallback single-threaded in cui lo sniffer non ha un task dedicato.
 #if defined(ARDUINO_ARCH_ESP32)
   static bool remotePollingSuspendedLogged = false;
-  if (g_snifferTaskRunning) {
+  if (g_snifferTaskRunning && appconfig::REMOTE_DB_AUTO_POLL_ENABLED) {
     remotePollingSuspendedLogged = false;
     g_remoteRegistro.loop();
-  } else if (!remotePollingSuspendedLogged) {
+  } else if (!remotePollingSuspendedLogged && appconfig::REMOTE_DB_AUTO_POLL_ENABLED) {
     logRuntimeLine("[REMOTE_DB] polling automatico sospeso: task sniffer non attivo", true);
     remotePollingSuspendedLogged = true;
   }
 #else
-  g_remoteRegistro.loop();
+  if (appconfig::REMOTE_DB_AUTO_POLL_ENABLED) g_remoteRegistro.loop();
 #endif
   g_mesh.loop();
 
@@ -3236,7 +3239,9 @@ static void startRuntimeTasks() {
 
 static void printStartupBanner() {
 #if ENABLE_SERIAL_LOG
-#if CONFIG_IDF_TARGET_ESP32C3
+#if CONFIG_IDF_TARGET_ESP32C6
+  Serial.println(F("ccTalk MULTI sniffer ESP32-C6 RX-only (Serial1)"));
+#elif CONFIG_IDF_TARGET_ESP32C3
   Serial.println(F("ccTalk MULTI sniffer ESP32-C3 RX-only (Serial1)"));
 #else
   Serial.println(F("ccTalk MULTI sniffer ESP32 RX-only (Serial2)"));
@@ -3246,7 +3251,9 @@ static void printStartupBanner() {
   Serial.println(F("Modelli Bill Validator: configurazione per indirizzo da modalita PROG"));
   if (g_bootMode == BOOT_MODE_PROG) {
     Serial.println(F("Boot mode: PROG"));
-    Serial.println(F("Accesso PROG: GPIO4 LOW al boot o pulsante premuto in RUN"));
+    Serial.print(F("Accesso PROG: GPIO"));
+    Serial.print(appconfig::PROG_MODE_BUTTON_PIN);
+    Serial.println(F(" LOW al boot o pulsante premuto in RUN"));
     Serial.println(F("Apri http://192.168.4.1 per Impostazioni/Stato"));
   } else {
     Serial.println(F("Boot mode: RUN"));

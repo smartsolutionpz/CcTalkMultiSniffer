@@ -15,6 +15,8 @@
 namespace ccms {
 
 namespace {
+WifiService* g_wifiEventTarget = nullptr;
+
 // Evita controlli ripetuti su stringhe nullable nei punti di log/formattazione.
 const char* safeText(const char* v) {
   return v ? v : "";
@@ -27,6 +29,13 @@ bool sameSsid(const char* a, const char* b) {
 
 bool isValidEpochTime(time_t epoch) {
   return epoch >= 1704067200; // 2024-01-01T00:00:00Z
+}
+
+void handleArduinoWifiEvent(arduino_event_t* event) {
+  if (!g_wifiEventTarget || !event) return;
+  if (event->event_id == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+    g_wifiEventTarget->noteDisconnectReason(event->event_info.wifi_sta_disconnected.reason);
+  }
 }
 } // namespace
 
@@ -71,7 +80,7 @@ void WifiService::setLogHook(LogHook hook, void* userData) {
 
 bool WifiService::begin() {
   // Modalita RUN: privilegiamo la station verso la rete salvata. L'AP locale
-  // resta riservato alla modalita PROG o al fallback quando la station fallisce.
+  // resta riservato alla modalita PROG o all'opzione AP RUN esplicita.
   _started = true;
   _enabled = true;
   _apOnlyMode = false;
@@ -81,8 +90,9 @@ bool WifiService::begin() {
 
   WiFi.persistent(false);
   resetRadioStackForStart();
-  WiFi.setAutoReconnect(true);
+  WiFi.setAutoReconnect(false);
   WiFi.setSleep(false);
+  attachWifiEvents();
 
   if (_hostname && _hostname[0] != '\0') {
     WiFi.setHostname(_hostname);
@@ -93,9 +103,6 @@ bool WifiService::begin() {
   }
 
   if (!_ssid || _ssid[0] == '\0') {
-    if (!_apFallbackActive) {
-      startApFallback();
-    }
     logLine("WiFi credentials missing");
     return true;
   }
@@ -118,8 +125,9 @@ bool WifiService::beginApOnly() {
 
   WiFi.persistent(false);
   resetRadioStackForStart();
-  WiFi.setAutoReconnect(true);
+  WiFi.setAutoReconnect(false);
   WiFi.setSleep(false);
+  attachWifiEvents();
 
   if (_hostname && _hostname[0] != '\0') {
     WiFi.setHostname(_hostname);
@@ -140,25 +148,26 @@ void WifiService::loop() {
       _connecting = false;
       logConnectedInfo();
     }
+    stopApFallbackIfNotNeeded();
     requestClockSync();
     return;
   }
 
+  const uint32_t now = millis();
+
   if (_wasConnected) {
     _wasConnected = false;
+    _connecting = false;
+    _lastAttemptMs = now;
     logLine("WiFi disconnected");
+    logPendingDisconnectReason();
   }
-
-  const uint32_t now = millis();
 
   if (_connecting && (uint32_t)(now - _attemptStartMs) >= _connectTimeoutMs) {
     _connecting = false;
     WiFi.disconnect(false, false);
     _lastAttemptMs = now;
     logLine("WiFi connect timeout");
-    if (!_apFallbackActive) {
-      startApFallback();
-    }
   }
 
   if (!_connecting && _ssid && _ssid[0] != '\0' &&
@@ -293,9 +302,6 @@ void WifiService::reconnect() {
 
   if (!_ssid || _ssid[0] == '\0') {
     logLine("WiFi credentials cleared");
-    if (!_apFallbackActive) {
-      startApFallback();
-    }
     return;
   }
 
@@ -317,6 +323,36 @@ bool WifiService::getClockInfo(ClockInfo& out) const {
   strftime(out.display, sizeof(out.display), "%d/%m/%Y %H:%M:%S", &tmNow);
   strftime(out.iso8601, sizeof(out.iso8601), "%Y-%m-%dT%H:%M:%S%z", &tmNow);
   return true;
+}
+
+void WifiService::attachWifiEvents() {
+#if defined(ARDUINO_ARCH_ESP32)
+  if (_eventsAttached) return;
+  g_wifiEventTarget = this;
+  WiFi.onEvent(handleArduinoWifiEvent, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+  _eventsAttached = true;
+#endif
+}
+
+void WifiService::noteDisconnectReason(uint16_t reason) {
+  _lastDisconnectReason = reason;
+  _disconnectReasonPending = true;
+}
+
+void WifiService::logPendingDisconnectReason() {
+  if (!_disconnectReasonPending) return;
+  const uint16_t reason = _lastDisconnectReason;
+  _disconnectReasonPending = false;
+
+  char line[128] = {0};
+#if defined(ARDUINO_ARCH_ESP32)
+  snprintf(line, sizeof(line), "WiFi disconnect reason: %u (%s)",
+           (unsigned)reason,
+           safeText(WiFi.disconnectReasonName((wifi_err_reason_t)reason)));
+#else
+  snprintf(line, sizeof(line), "WiFi disconnect reason: %u", (unsigned)reason);
+#endif
+  logLine(line);
 }
 
 void WifiService::startConnectAttempt() {
@@ -378,6 +414,17 @@ void WifiService::startApFallback() {
   logLine(line);
 }
 
+void WifiService::stopApFallbackIfNotNeeded() {
+  if (!_apFallbackActive) return;
+  if (_apOnlyMode || appconfig::WIFI_RUN_AP_ALWAYS_ON || _runApEnabled) return;
+
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_STA);
+  applyRadioStabilitySettings();
+  _apFallbackActive = false;
+  logLine("AP fallback stopped after STA connection");
+}
+
 void WifiService::resetRadioStackForStart() {
   if (!appconfig::WIFI_RESET_RADIO_ON_BEGIN) return;
 
@@ -390,7 +437,15 @@ void WifiService::resetRadioStackForStart() {
 void WifiService::applyRadioStabilitySettings() {
   WiFi.setSleep(false);
 #if defined(ARDUINO_ARCH_ESP32)
+  esp_wifi_set_ps(WIFI_PS_NONE);
   esp_wifi_set_max_tx_power(appconfig::WIFI_MAX_TX_POWER);
+  if (appconfig::WIFI_FORCE_LEGACY_24G) {
+    const uint8_t protocol = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N;
+    esp_wifi_set_protocol(WIFI_IF_STA, protocol);
+    esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20);
+    esp_wifi_set_protocol(WIFI_IF_AP, protocol);
+    esp_wifi_set_bandwidth(WIFI_IF_AP, WIFI_BW_HT20);
+  }
 #endif
 }
 
