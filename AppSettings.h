@@ -204,7 +204,6 @@ struct AppSettings {
   char wifiSsid[kWifiSsidSize] = {0};
   char wifiPass[kWifiPassSize] = {0};
   bool saveWifiCredentials = false;
-  bool runApEnabled = false;
   char serverUrl[kServerUrlSize] = {0};
   char remoteEventUrl[kRemoteEventUrlSize] = {0};
   char dbHost[kDbHostSize] = {0};
@@ -241,7 +240,6 @@ struct AppSettings {
     memset(wifiSsid, 0, sizeof(wifiSsid));
     memset(wifiPass, 0, sizeof(wifiPass));
     saveWifiCredentials = false;
-    runApEnabled = false;
     memset(serverUrl, 0, sizeof(serverUrl));
     memset(remoteEventUrl, 0, sizeof(remoteEventUrl));
     memset(dbHost, 0, sizeof(dbHost));

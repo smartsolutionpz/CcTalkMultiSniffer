@@ -18,16 +18,14 @@ static const char* const WIFI_PASS = "";
 static const char* const WIFI_HOSTNAME = "cctalk-sniffer";
 static const char* const WIFI_FALLBACK_AP_SSID = "CcTalkSniffer-AP";
 static const char* const WIFI_FALLBACK_AP_PASS = ""; // vuota = AP aperto
-static const bool WIFI_RUN_AP_ALWAYS_ON = false;
 static const uint8_t WIFI_AP_CHANNEL = 1;
-// Unita esp-idf: 0.25 dBm. 52 = circa 13 dBm, compromesso tra portata e assorbimento.
-static const int8_t WIFI_MAX_TX_POWER = 52;
+static const int8_t WIFI_TX_POWER = 78; // unita 0.25 dBm: 78 = 19.5 dBm
 static const bool WIFI_FORCE_LEGACY_24G = true;
-static const bool WIFI_RESET_RADIO_ON_BEGIN = true;
+static const uint32_t WIFI_PERFORMANCE_REAPPLY_INTERVAL_MS = 5000;
 
 // Timeout di una singola connessione e intervallo tra retry (ms).
-static const uint32_t WIFI_CONNECT_TIMEOUT_MS = 20000;
-static const uint32_t WIFI_RETRY_INTERVAL_MS = 10000;
+static const uint32_t WIFI_CONNECT_TIMEOUT_MS = 15000;
+static const uint32_t WIFI_RETRY_INTERVAL_MS = 30000;
 static const char* const TIME_TZ = "CET-1CEST,M3.5.0/2,M10.5.0/3";
 static const char* const NTP_SERVER_1 = "pool.ntp.org";
 static const char* const NTP_SERVER_2 = "time.cloudflare.com";
@@ -82,22 +80,25 @@ static const uint32_t FRAM_CONGRUENCE_CHECK_INTERVAL_MS = 60000;
 // Runtime scheduler (Fase 1: sniffer priorita alta, servizi non bloccanti).
 // Questi valori bilanciano latenza di sniffing e tempo disponibile ai servizi.
 static const uint32_t SNIFFER_LOOP_BUDGET_US = 2500;
-static const uint32_t SNIFFER_COOP_YIELD_INTERVAL_US = 2000;
+static const uint32_t SNIFFER_COOP_YIELD_INTERVAL_US = 500;
 static const uint32_t NET_SERVICE_LOOP_INTERVAL_MS = 2;
 static const uint32_t PERSIST_LOOP_INTERVAL_MS = 20;
 static const uint32_t TASK_STACK_BYTES_SNIFFER = 8192;
 static const uint32_t TASK_STACK_BYTES_NET = 16384;
-static const uint8_t TASK_PRIORITY_SNIFFER = 3;
+static const uint8_t TASK_PRIORITY_SNIFFER = 1;
 static const uint8_t TASK_PRIORITY_NET = 1;
 
 // Fase 3: cloud publish + mesh locale.
 static const bool CLOUD_PUBLISH_ENABLED = false;
 static const uint32_t CLOUD_PUBLISH_INTERVAL_MS = 5000;
 static const uint16_t CLOUD_HTTP_TIMEOUT_MS = 200;
-static const bool REMOTE_DB_AUTO_POLL_ENABLED = true;
-static const uint16_t REMOTE_DB_HTTP_TIMEOUT_MS = 1200;
-static const uint32_t REMOTE_DB_POLL_INTERVAL_MS = REMOTE_DB_HTTP_TIMEOUT_MS;
-static const uint32_t REMOTE_DB_RETRY_INTERVAL_MS = REMOTE_DB_HTTP_TIMEOUT_MS;
+static const bool REMOTE_DB_AUTO_POLL_ENABLED = false;
+static const uint16_t REMOTE_DB_HTTP_TIMEOUT_MS = 500;
+static const uint32_t REMOTE_DB_POLL_INTERVAL_MS = 30000;
+static const uint32_t REMOTE_DB_RETRY_INTERVAL_MS = 60000;
+static const uint32_t REMOTE_DB_WIFI_SETTLE_MS = 3000;
+static const uint32_t REMOTE_DB_FAILURE_BACKOFF_BASE_MS = 60000;
+static const uint32_t REMOTE_DB_FAILURE_BACKOFF_MAX_MS = 300000;
 static const uint32_t MESH_START_DELAY_MS = 3000;
 static const uint32_t MESH_RETRY_INTERVAL_MS = 5000;
 static const uint32_t MESH_HEARTBEAT_INTERVAL_MS = 1000;

@@ -50,7 +50,6 @@ bool AppSettingsStore::load(AppSettings& out) {
   // "configurazione utente realmente salvata".
   const bool valid = prefs.getBool("valid", false);
   out.saveWifiCredentials = prefs.getBool("wifi_save", false);
-  out.runApEnabled = prefs.getBool("run_ap_on", false);
   copyString(prefs.getString("wifi_ssid", ""), out.wifiSsid, sizeof(out.wifiSsid));
   copyString(prefs.getString("wifi_pass", ""), out.wifiPass, sizeof(out.wifiPass));
   copyString(prefs.getString("srv_url", ""), out.serverUrl, sizeof(out.serverUrl));
@@ -153,7 +152,6 @@ bool AppSettingsStore::save(const AppSettings& in) {
 
   bool ok = true;
   ok = ok && prefs.putBool("wifi_save", keepWifi) > 0;
-  ok = ok && prefs.putBool("run_ap_on", in.runApEnabled) > 0;
   ok = ok && prefs.putUChar("hop_model", sanitizeHopperModel(in.hopperModel)) > 0;
   ok = ok && prefs.putUChar("bv_model", sanitizeBillValidatorModel(in.billValidatorModel)) > 0;
   ok = ok &&

@@ -8,6 +8,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "../Config.h"
+
 namespace ccms {
 
 namespace {
@@ -296,7 +298,11 @@ bool RemoteRegistroEventiService::begin() {
   _droppedCount = 0;
   _lastAttemptMs = millis();
   _lastDbPollMs = _lastAttemptMs - _dbPollIntervalMs;
+  _wifiConnectedSinceMs = 0;
+  _remoteBackoffUntilMs = 0;
   _lastWifiConnected = false;
+  _consecutiveFailures = 0;
+  _remoteBackoffLogged = false;
   _requestState = REQUEST_STATE_IDLE;
   _lastHandledRequestId = 0;
   _lastHandledRequestSignature[0] = '\0';
@@ -761,24 +767,64 @@ void RemoteRegistroEventiService::loop() {
   const bool wifiConnected = _wifi.isConnected();
   const bool justConnected = (wifiConnected && !_lastWifiConnected);
   _lastWifiConnected = wifiConnected;
-  if (!wifiConnected) return;
 
   const uint32_t now = millis();
+  if (!wifiConnected) {
+    _wifiConnectedSinceMs = 0;
+    return;
+  }
+
+  if (justConnected || _wifiConnectedSinceMs == 0) {
+    _wifiConnectedSinceMs = now;
+    _lastAttemptMs = now;
+    _lastDbPollMs = now;
+    return;
+  }
+
+  if ((uint32_t)(now - _wifiConnectedSinceMs) < appconfig::REMOTE_DB_WIFI_SETTLE_MS) return;
+
+  if (_remoteBackoffUntilMs != 0 && (int32_t)(now - _remoteBackoffUntilMs) < 0) {
+    if (!_remoteBackoffLogged) {
+      char line[160] = {0};
+      snprintf(line, sizeof(line),
+               "[REMOTE_DB] polling remoto in backoff per %lums",
+               (unsigned long)(_remoteBackoffUntilMs - now));
+      logLine(line);
+      _remoteBackoffLogged = true;
+    }
+    return;
+  }
+  _remoteBackoffUntilMs = 0;
+  _remoteBackoffLogged = false;
+
   if (!justConnected && (uint32_t)(now - _lastDbPollMs) < _dbPollIntervalMs) return;
   if (!justConnected && (uint32_t)(now - _lastAttemptMs) < _retryIntervalMs) return;
   _lastDbPollMs = now;
+  _lastAttemptMs = now;
 
   PendingRequest request;
   String statusMessage;
   if (!fetchPendingRequest(request, statusMessage)) {
     _failureCount++;
+    if (_consecutiveFailures < 10) _consecutiveFailures++;
+    uint32_t backoffMs = appconfig::REMOTE_DB_FAILURE_BACKOFF_BASE_MS * (uint32_t)_consecutiveFailures;
+    if (backoffMs > appconfig::REMOTE_DB_FAILURE_BACKOFF_MAX_MS) {
+      backoffMs = appconfig::REMOTE_DB_FAILURE_BACKOFF_MAX_MS;
+    }
+    _remoteBackoffUntilMs = now + backoffMs;
+    _remoteBackoffLogged = false;
     char line[224] = {0};
     snprintf(line, sizeof(line),
-             "[REMOTE_DB] lettura richiesta pendente fallita: %s",
-             (statusMessage.length() > 0) ? statusMessage.c_str() : "errore sconosciuto");
+             "[REMOTE_DB] lettura richiesta pendente fallita: %s; backoff=%lums",
+             (statusMessage.length() > 0) ? statusMessage.c_str() : "errore sconosciuto",
+             (unsigned long)backoffMs);
     logLine(line);
     return;
   }
+
+  _consecutiveFailures = 0;
+  _remoteBackoffUntilMs = 0;
+  _remoteBackoffLogged = false;
 
   if (request.requestId == 0) {
     _requestState = REQUEST_STATE_IDLE;

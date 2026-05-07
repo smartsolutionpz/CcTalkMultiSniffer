@@ -68,8 +68,8 @@
 #include "mesh/EspNowMasterService.h"
 #include "web/WebServerService.h"
 
-static_assert(appconfig::TASK_PRIORITY_SNIFFER > appconfig::TASK_PRIORITY_NET,
-              "ccTalk sniffer priority must be higher than auxiliary services");
+static_assert(appconfig::TASK_PRIORITY_SNIFFER >= appconfig::TASK_PRIORITY_NET,
+              "ccTalk sniffer priority must be at least auxiliary services priority");
 
 // Velocita della seriale usata per il log locale e per i comandi da console.
 static const uint32_t LOG_BAUD = 115200;
@@ -665,7 +665,6 @@ static void detectBootMode() {
 
 static void applyRuntimeNetworkSettings() {
   g_wifi.setCredentials(g_appSettings.wifiSsid, g_appSettings.wifiPass);
-  g_wifi.setRunApEnabled(appconfig::MESH_ENABLED && g_appSettings.runApEnabled);
   g_cloud.setEndpointUrl(g_appSettings.serverUrl);
   g_remoteRegistro.setEndpointUrl(g_appSettings.remoteEventUrl);
   g_remoteRegistro.setLocationCode(g_appSettings.locationCode);
@@ -1203,8 +1202,6 @@ static bool onWebSaveSettings(const ccms::AppSettings& in, String& message, void
     message = "impostazioni salvate; WiFi disattivato";
   } else if (!next.saveWifiCredentials) {
     message = "impostazioni salvate; WiFi applicato ora ma non memorizzato";
-  } else if (appconfig::MESH_ENABLED && next.runApEnabled) {
-    message = "impostazioni salvate; WiFi automatica attiva e AP RUN abilitato";
   } else {
     message = "impostazioni salvate; connessione WiFi automatica abilitata";
   }

@@ -1,6 +1,6 @@
 // Scopo del file:
-// dichiara `WifiService`, il servizio che gestisce la connettivita Wi-Fi
-// in modalita RUN (solo STA) e PROG (AP locale esplicito).
+// dichiara `WifiService`, il servizio che gestisce la connettivita Wi-Fi.
+// RUN usa solo la station verso il router; PROG usa solo l'AP locale.
 #ifndef CCTALK_MULTI_SNIFFER_NET_WIFI_SERVICE_H
 #define CCTALK_MULTI_SNIFFER_NET_WIFI_SERVICE_H
 
@@ -13,9 +13,6 @@
 
 namespace ccms {
 
-// Servizio di connettivita Wi-Fi non bloccante.
-// In RUN tenta la connessione station verso la rete salvata.
-// In PROG espone l'access point locale per la configurazione.
 class WifiService {
 public:
   typedef void (*LogHook)(const char* line, void* userData);
@@ -38,15 +35,10 @@ public:
 
   WifiService();
 
-  // Configurazione opzionale da sketch (alternativa a Config.h).
   void setCredentials(const char* ssid, const char* pass);
-  void setRunApEnabled(bool enabled);
   void setHostname(const char* hostname);
   void setTimings(uint32_t connectTimeoutMs, uint32_t retryIntervalMs);
 
-  // Bootstrap nelle due modalita principali.
-  // `begin()` = RUN, station verso la rete salvata.
-  // `beginApOnly()` = PROG, AP locale attivato esplicitamente al boot.
   bool begin();
   bool beginApOnly();
   bool isConnected() const;
@@ -54,10 +46,8 @@ public:
   int rssi() const;
   bool isApFallbackActive() const;
 
-  // Poll non bloccante da chiamare nel loop principale.
   void loop();
 
-  // Metodi utili per diagnostica e integrazione con gli altri servizi.
   bool enabled() const;
   wl_status_t status() const;
   const char* statusText() const;
@@ -74,15 +64,14 @@ public:
   const RingLog& ringLog() const { return _ringLog; }
 
 private:
-  void resetRadioStackForStart();
-  void applyRadioStabilitySettings();
   void attachWifiEvents();
+  void configureCommonRadio();
+  void enforcePerformanceMode(bool logResult);
+  void logRuntimeConfig(const char* mode);
+  void logStatusIfChanged(wl_status_t st, bool force);
   void logPendingDisconnectReason();
-  // Avvia un tentativo di connessione STA mantenendo, se necessario, l'AP attivo.
   void startConnectAttempt();
-  // Attiva l'access point locale di modalita PROG.
-  void startApFallback();
-  void stopApFallbackIfNotNeeded();
+  bool startProgAccessPoint();
   void requestClockSync();
   void logLine(const char* line);
   void logConnectedInfo();
@@ -90,22 +79,24 @@ private:
   const char* _ssid = nullptr;
   const char* _pass = nullptr;
   const char* _hostname = nullptr;
-  uint32_t _connectTimeoutMs = 20000;
-  uint32_t _retryIntervalMs = 5000;
+  uint32_t _connectTimeoutMs = 15000;
+  uint32_t _retryIntervalMs = 30000;
 
   bool _enabled = false;
   bool _started = false;
   bool _apOnlyMode = false;
-  bool _runApEnabled = false;
   bool _connecting = false;
   bool _wasConnected = false;
-  bool _apFallbackActive = false;
+  bool _apActive = false;
   bool _clockSyncRequested = false;
   bool _clockSyncedFromInternet = false;
   bool _eventsAttached = false;
+  bool _lastLoggedStatusValid = false;
+  wl_status_t _lastLoggedStatus = WL_IDLE_STATUS;
   uint32_t _attemptStartMs = 0;
   uint32_t _lastAttemptMs = 0;
   uint32_t _lastClockSyncRequestMs = 0;
+  uint32_t _lastPerformanceApplyMs = 0;
   volatile uint16_t _lastDisconnectReason = 0;
   volatile bool _disconnectReasonPending = false;
 

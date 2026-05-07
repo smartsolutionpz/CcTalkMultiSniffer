@@ -280,7 +280,10 @@ void WebServerService::handleRoot() {
       });
     }
 
+    let wifiIndicatorInFlight = false;
     async function refreshWifiIndicator() {
+      if (wifiIndicatorInFlight) return;
+      wifiIndicatorInFlight = true;
       try {
         const data = await fetch('/api/status', { cache: 'no-store' }).then(r => r.json());
         const ssid = s(data.wifi.ssid) || '-';
@@ -289,6 +292,8 @@ void WebServerService::handleRoot() {
         setBillRecyclerInputs(findRecyclerEntry(data));
       } catch (e) {
         document.getElementById('wifiIndicator').textContent = 'WiFi: stato non disponibile';
+      } finally {
+        wifiIndicatorInFlight = false;
       }
     }
 
@@ -345,7 +350,7 @@ void WebServerService::handleRoot() {
       document.getElementById(id).addEventListener('input', () => { billRecyclerDirty = true; });
     });
     refreshWifiIndicator();
-    setInterval(refreshWifiIndicator, 3000);
+    setInterval(refreshWifiIndicator, 5000);
   </script>
 </body>
 </html>
@@ -449,7 +454,10 @@ void WebServerService::handleStatusPage() {
         wifi.connected ? `WiFi connesso: ${ssid}` : `WiFi non connesso: ${ssid}`;
     }
 
+    let refreshInFlight = false;
     async function refresh() {
+      if (refreshInFlight) return;
+      refreshInFlight = true;
       try {
         const data = await fetch('/api/status', { cache: 'no-store' }).then(r => r.json());
         updateWifiIndicator(data.wifi || {});
@@ -514,11 +522,13 @@ void WebServerService::handleStatusPage() {
         document.getElementById('wifiIndicator').textContent = 'WiFi: stato non disponibile';
         document.getElementById('wifi').textContent = 'Errore fetch /api/status';
         document.getElementById('clock').textContent = 'Errore fetch /api/status';
+      } finally {
+        refreshInFlight = false;
       }
     }
 
     refresh();
-    setInterval(refresh, 2000);
+    setInterval(refresh, 5000);
 
     async function postJson(url, payload) {
       const r = await fetch(url, {
@@ -705,10 +715,6 @@ void WebServerService::handleSettingsPage() {
         <label for="saveWifiCredentials">Salva credenziali WiFi</label>
         <label class="checkbox"><input id="saveWifiCredentials" type="checkbox">Memorizza SSID e password per la connessione automatica</label>
       </div>
-      <div class="row">
-        <label for="runApEnabled">Access point in RUN</label>
-        <label class="checkbox"><input id="runApEnabled" type="checkbox">Mantieni attivo l'AP anche in RUN (disattivato finche la mesh resta spenta)</label>
-      </div>
     </div>
 
     <div class="section">
@@ -832,7 +838,10 @@ void WebServerService::handleSettingsPage() {
       });
     }
 
+    let wifiIndicatorInFlight = false;
     async function refreshWifiIndicator() {
+      if (wifiIndicatorInFlight) return;
+      wifiIndicatorInFlight = true;
       try {
         const data = await fetch('/api/status', { cache: 'no-store' }).then(r => r.json());
         const ssid = s(data.wifi.ssid) || '-';
@@ -841,6 +850,8 @@ void WebServerService::handleSettingsPage() {
           : `WiFi non connesso: ${ssid}`;
       } catch (e) {
         wifiIndicator().textContent = 'WiFi: stato non disponibile';
+      } finally {
+        wifiIndicatorInFlight = false;
       }
     }
 
@@ -1332,7 +1343,6 @@ void WebServerService::handleSettingsPage() {
       renderDetectedDevices(currentPeripheralCatalog.detectedDevices);
       document.getElementById('wifiPass').value = s.wifiPass || '';
       document.getElementById('saveWifiCredentials').checked = !!s.saveWifiCredentials;
-      document.getElementById('runApEnabled').checked = !!s.runApEnabled;
       document.getElementById('serverUrl').value = s.serverUrl || '';
       document.getElementById('locationCode').value = s.locationCode || '';
       document.getElementById('apiKey').value = s.apiKey || '';
@@ -1353,7 +1363,6 @@ void WebServerService::handleSettingsPage() {
       params.set('wifiSsid', selectedWifiSsid());
       params.set('wifiPass', document.getElementById('wifiPass').value);
       params.set('saveWifiCredentials', document.getElementById('saveWifiCredentials').checked ? '1' : '0');
-      params.set('runApEnabled', document.getElementById('runApEnabled').checked ? '1' : '0');
       params.set('serverUrl', document.getElementById('serverUrl').value);
       params.set('locationCode', document.getElementById('locationCode').value);
       params.set('apiKey', document.getElementById('apiKey').value);
@@ -1474,7 +1483,7 @@ void WebServerService::handleSettingsPage() {
       document.getElementById('status').textContent = 'Errore rete durante caricamento';
     });
     refreshWifiIndicator();
-    setInterval(refreshWifiIndicator, 3000);
+    setInterval(refreshWifiIndicator, 5000);
   </script>
 </body>
 </html>
@@ -1833,8 +1842,6 @@ void WebServerService::appendSettingsJson(String& out,
   appendJsonEscaped(out, settings.wifiPass);
   out += "\",\"saveWifiCredentials\":";
   out += (settings.saveWifiCredentials ? "true" : "false");
-  out += ",\"runApEnabled\":";
-  out += (settings.runApEnabled ? "true" : "false");
   out += ",\"serverUrl\":\"";
   appendJsonEscaped(out, settings.serverUrl);
   out += "\",\"remoteEventUrl\":\"";
@@ -1898,8 +1905,6 @@ bool WebServerService::parseSettingsFromRequest(AppSettings& out, String& messag
   copyBounded(_server.arg("wifiPass"), out.wifiPass, sizeof(out.wifiPass));
   const String saveWifiValue = _server.arg("saveWifiCredentials");
   out.saveWifiCredentials = (saveWifiValue == "1" || saveWifiValue == "true" || saveWifiValue == "on");
-  const String runApValue = _server.arg("runApEnabled");
-  out.runApEnabled = (runApValue == "1" || runApValue == "true" || runApValue == "on");
   const String coinAcceptorInValue = _server.arg("coinAcceptorInEnabled");
   out.coinAcceptorInEnabled =
       (coinAcceptorInValue == "1" || coinAcceptorInValue == "true" || coinAcceptorInValue == "on");

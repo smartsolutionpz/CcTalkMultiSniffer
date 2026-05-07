@@ -139,9 +139,13 @@ private:
   uint32_t _lastAttemptMs = 0;
   uint32_t _lastDbPollMs = 0;
   uint32_t _dbPollIntervalMs = 10000;
+  uint32_t _wifiConnectedSinceMs = 0;
+  uint32_t _remoteBackoffUntilMs = 0;
   uint32_t _successCount = 0;
   uint32_t _failureCount = 0;
   uint32_t _droppedCount = 0;
+  uint8_t _consecutiveFailures = 0;
+  bool _remoteBackoffLogged = false;
   bool _lastWifiConnected = false;
   RequestProtocolState _requestState = REQUEST_STATE_IDLE;
   uint32_t _lastHandledRequestId = 0;
