@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\peppe\\\\Documents\\\\GitHub\\\\CcTalkMultiSniffer\" -Recurse -Force)",
+      "Bash(Select-Object FullName, PSIsContainer)",
+      "Bash(Sort-Object FullName)",
+      "Bash(Format-Table -AutoSize)",
+      "Bash(Get-ChildItem -Recurse -Include \"*.cpp\", \"*.ino\", \"*.h\")",
+      "Bash(Select-Object FullName)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\peppe\\\\Documents\\\\GitHub\\\\CcTalkMultiSniffer\" -Recurse -File)",
+      "Bash(Select-Object -First 50)",
+      "Bash(Format-Table -Property FullName)",
+      "Bash(pio run *)"
+    ]
+  }
+}

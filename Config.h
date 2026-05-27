@@ -42,9 +42,15 @@ static const int CCTALK_UART_TX_PIN = -1;  // RX-only
 static const int FRAM_I2C_SDA_PIN = 22;
 static const int FRAM_I2C_SCL_PIN = 23;
 static const int LEVEL_SHIFTER_OE_PIN = -1;
-static const int PROG_MODE_BUTTON_PIN = 1; // D1, verso GND con INPUT_PULLUP
+static const int PROG_MODE_BUTTON_PIN = -1; // spostato su PCF8574 P3
 static const int CCTALK_STATUS_LED_PIN = -1;
 static const int WIFI_STATUS_LED_PIN = -1;
+// PCF8574MT GPIO expander (stesso bus I2C di FRAM, A0=GND, A1=VCC, A2=GND -> 0x21)
+static const bool    GPIO_EXPANDER_ENABLED         = true;
+static const uint8_t GPIO_EXPANDER_I2C_ADDR        = 0x21;
+static const uint8_t GPIO_EXPANDER_PIN_BUTTON_PROG = 3;  // P3: pulsante PROG
+static const uint8_t GPIO_EXPANDER_PIN_LED_WIFI    = 6;  // P6: LED connessione WiFi
+static const uint8_t GPIO_EXPANDER_PIN_LED_CCTALK  = 7;  // P7: LED stato CCTalk
 #elif CONFIG_IDF_TARGET_ESP32C3
 // NOTE: i pin del modulo ESP32-C3 SuperMini variano per clone/versione.
 static const int CCTALK_UART_RX_PIN = 21;  // RX sniff ccTalk
@@ -57,6 +63,11 @@ static const int PROG_MODE_BUTTON_PIN = 4;
 // usare GPIO non sicuri puo impedire l'avvio del WiFi.
 static const int CCTALK_STATUS_LED_PIN = 7;  //7
 static const int WIFI_STATUS_LED_PIN = 6;    //6
+static const bool    GPIO_EXPANDER_ENABLED         = false;
+static const uint8_t GPIO_EXPANDER_I2C_ADDR        = 0x20;
+static const uint8_t GPIO_EXPANDER_PIN_BUTTON_PROG = 0;
+static const uint8_t GPIO_EXPANDER_PIN_LED_WIFI    = 0;
+static const uint8_t GPIO_EXPANDER_PIN_LED_CCTALK  = 0;
 #else
 static const int CCTALK_UART_RX_PIN = 16;
 static const int CCTALK_UART_TX_PIN = -1;  // RX-only
@@ -66,6 +77,11 @@ static const int LEVEL_SHIFTER_OE_PIN = -1;
 static const int PROG_MODE_BUTTON_PIN = 4;
 static const int CCTALK_STATUS_LED_PIN = -1;
 static const int WIFI_STATUS_LED_PIN = -1;
+static const bool    GPIO_EXPANDER_ENABLED         = false;
+static const uint8_t GPIO_EXPANDER_I2C_ADDR        = 0x20;
+static const uint8_t GPIO_EXPANDER_PIN_BUTTON_PROG = 0;
+static const uint8_t GPIO_EXPANDER_PIN_LED_WIFI    = 0;
+static const uint8_t GPIO_EXPANDER_PIN_LED_CCTALK  = 0;
 #endif
 static const uint32_t PROG_MODE_DEBOUNCE_MS = 30;
 static const bool LEVEL_SHIFTER_OE_ACTIVE_HIGH = true;

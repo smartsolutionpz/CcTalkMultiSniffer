@@ -262,6 +262,7 @@ static uint32_t g_lastMeshStartAttemptMs = 0;
 static volatile uint32_t g_lastCcTalkActivityMs = 0;
 static bool g_progButtonPrevPressed = false;
 static bool g_meshStartupDeferredLogged = false;
+static uint8_t g_gpioExpanderPort = 0xFF; // stato porta PCF8574: tutti i pin alti (LED off, button input)
 // Override del boot mode conservato attraverso il solo reboot software:
 // permette al pulsante di richiedere PROG/RUN anche durante il normale run.
 #if defined(ARDUINO_ARCH_ESP32)
@@ -647,9 +648,11 @@ static void detectBootMode() {
   // se il firmware debba partire in esecuzione normale o in configurazione.
   // Un eventuale override impostato prima di un reboot software ha priorita
   // sul livello del pin per consentire il cambio modo anche a runtime.
-  pinMode(appconfig::PROG_MODE_BUTTON_PIN, INPUT_PULLUP);
+  if (!appconfig::GPIO_EXPANDER_ENABLED && appconfig::PROG_MODE_BUTTON_PIN >= 0) {
+    pinMode(appconfig::PROG_MODE_BUTTON_PIN, INPUT_PULLUP);
+  }
   delay(appconfig::PROG_MODE_DEBOUNCE_MS);
-  const bool buttonPressed = (digitalRead(appconfig::PROG_MODE_BUTTON_PIN) == LOW);
+  const bool buttonPressed = readProgButtonRaw();
 
   if (g_bootModeOverride == (int8_t)BOOT_MODE_PROG) {
     g_bootMode = BOOT_MODE_PROG;
@@ -724,10 +727,10 @@ static void enterRunMode() {
 }
 
 static void pollProgrammingModeButton() {
-  bool buttonPressed = (digitalRead(appconfig::PROG_MODE_BUTTON_PIN) == LOW);
+  bool buttonPressed = readProgButtonRaw();
   if (buttonPressed != g_progButtonPrevPressed) {
     delay(appconfig::PROG_MODE_DEBOUNCE_MS);
-    buttonPressed = (digitalRead(appconfig::PROG_MODE_BUTTON_PIN) == LOW);
+    buttonPressed = readProgButtonRaw();
     if (buttonPressed != g_progButtonPrevPressed) {
       g_progButtonPrevPressed = buttonPressed;
       if (buttonPressed) {
@@ -753,7 +756,65 @@ static void writeStatusLed(int pin, bool on) {
   digitalWrite(pin, on ? activeLevel : idleLevel);
 }
 
+// --- PCF8574MT GPIO expander (I2C, stessa linea di FRAM) ---
+
+static void pcf8574WritePort() {
+  Wire.beginTransmission(appconfig::GPIO_EXPANDER_I2C_ADDR);
+  Wire.write(g_gpioExpanderPort);
+  Wire.endTransmission();
+}
+
+static void pcf8574SetPin(uint8_t pin, bool high) {
+  if (high) g_gpioExpanderPort |=  (1u << pin);
+  else      g_gpioExpanderPort &= ~(1u << pin);
+  pcf8574WritePort();
+}
+
+static bool pcf8574ReadPin(uint8_t pin) {
+  pcf8574SetPin(pin, true); // forza il pin in input (pullup quasi-bidirezionale)
+  Wire.requestFrom((uint8_t)appconfig::GPIO_EXPANDER_I2C_ADDR, (uint8_t)1);
+  if (!Wire.available()) return true; // default: non premuto
+  return ((Wire.read() >> pin) & 1u) != 0; // true = alto (non premuto)
+}
+
+// Accende/spegne il LED WiFi (PCF8574 source: 1 = acceso)
+static void writeLedWifi(bool on) {
+  if (appconfig::GPIO_EXPANDER_ENABLED) {
+    pcf8574SetPin(appconfig::GPIO_EXPANDER_PIN_LED_WIFI, on);
+    return;
+  }
+  writeStatusLed(appconfig::WIFI_STATUS_LED_PIN, on);
+}
+
+// Accende/spegne il LED CCTalk (PCF8574 source: 1 = acceso)
+static void writeLedCcTalk(bool on) {
+  if (appconfig::GPIO_EXPANDER_ENABLED) {
+    pcf8574SetPin(appconfig::GPIO_EXPANDER_PIN_LED_CCTALK, on);
+    return;
+  }
+  writeStatusLed(appconfig::CCTALK_STATUS_LED_PIN, on);
+}
+
+// Legge il pulsante PROG: restituisce true se premuto (pin basso)
+static bool readProgButtonRaw() {
+  if (appconfig::GPIO_EXPANDER_ENABLED) {
+    return !pcf8574ReadPin(appconfig::GPIO_EXPANDER_PIN_BUTTON_PROG);
+  }
+  if (appconfig::PROG_MODE_BUTTON_PIN < 0) return false;
+  return digitalRead(appconfig::PROG_MODE_BUTTON_PIN) == LOW;
+}
+
+// --- fine PCF8574MT ---
+
 static void initStatusLeds() {
+  if (appconfig::GPIO_EXPANDER_ENABLED) {
+    Wire.begin(appconfig::FRAM_I2C_SDA_PIN, appconfig::FRAM_I2C_SCL_PIN);
+    g_gpioExpanderPort = 0xFF;
+    pcf8574WritePort(); // tutti i pin alti: LED off, P3 in pullup input
+    writeLedCcTalk(false);
+    writeLedWifi(false);
+    return;
+  }
   if (appconfig::CCTALK_STATUS_LED_PIN >= 0) {
     pinMode(appconfig::CCTALK_STATUS_LED_PIN, OUTPUT);
   }
@@ -777,13 +838,13 @@ static void updateStatusLeds() {
   const bool wifiConnected = g_wifi.isConnected();
   const bool wifiApActive = g_wifi.isApFallbackActive();
 
-  writeStatusLed(appconfig::CCTALK_STATUS_LED_PIN, ccTalkPresent);
+  writeLedCcTalk(ccTalkPresent);
 
   if (wifiApActive) {
     const bool blinkOn = ((now / 300U) % 2U) == 0U;
-    writeStatusLed(appconfig::WIFI_STATUS_LED_PIN, blinkOn);
+    writeLedWifi(blinkOn);
   } else {
-    writeStatusLed(appconfig::WIFI_STATUS_LED_PIN, wifiConnected);
+    writeLedWifi(wifiConnected);
   }
 }
 
