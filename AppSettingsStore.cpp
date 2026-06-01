@@ -64,6 +64,11 @@ bool AppSettingsStore::load(AppSettings& out) {
   copyString(prefs.getString("db_pass", ""), out.dbPass, sizeof(out.dbPass));
   copyString(prefs.getString("loc_code", ""), out.locationCode, sizeof(out.locationCode));
   copyString(prefs.getString("api_key", ""), out.apiKey, sizeof(out.apiKey));
+  copyString(prefs.getString("mqtt_host", ""), out.mqttBrokerHost, sizeof(out.mqttBrokerHost));
+  out.mqttBrokerPort = (uint16_t)prefs.getUShort("mqtt_port", 1883);
+  copyString(prefs.getString("mqtt_user", ""), out.mqttUsername, sizeof(out.mqttUsername));
+  copyString(prefs.getString("mqtt_pass", ""), out.mqttPassword, sizeof(out.mqttPassword));
+  out.mqttEnabled = prefs.getBool("mqtt_en", false);
   out.hopperModel = sanitizeHopperModel(prefs.getUChar("hop_model", HOPPER_MODEL_ALBERICI_DISCRIMINATOR));
   out.billValidatorModel =
       sanitizeBillValidatorModel(prefs.getUChar("bv_model", BILL_VALIDATOR_MODEL_MD100));
@@ -149,6 +154,9 @@ bool AppSettingsStore::save(const AppSettings& in) {
   prefs.putString("db_pass", in.dbPass);
   prefs.putString("loc_code", in.locationCode);
   prefs.putString("api_key", in.apiKey);
+  prefs.putString("mqtt_host", in.mqttBrokerHost);
+  prefs.putString("mqtt_user", in.mqttUsername);
+  prefs.putString("mqtt_pass", in.mqttPassword);
 
   bool ok = true;
   ok = ok && prefs.putBool("wifi_save", keepWifi) > 0;
@@ -184,6 +192,8 @@ bool AppSettingsStore::save(const AppSettings& in) {
   ok = ok &&
        prefs.putUShort("bill_out_vm", sanitizeBillValidatorContributionMask(in.billOutValidatorMask)) > 0;
   ok = ok && prefs.putUShort("db_port", in.dbPort) > 0;
+  ok = ok && prefs.putUShort("mqtt_port", in.mqttBrokerPort) > 0;
+  ok = ok && prefs.putBool("mqtt_en", in.mqttEnabled) > 0;
   ok = ok && prefs.putBool("valid", true) > 0;
   prefs.end();
   return ok;

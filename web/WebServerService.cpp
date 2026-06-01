@@ -42,7 +42,9 @@ bool hasAnyTestConnectionArg(WebServer& server) {
          server.hasArg("serverUrl") ||
          server.hasArg("remoteEventUrl") ||
          server.hasArg("locationCode") ||
-         server.hasArg("apiKey");
+         server.hasArg("apiKey") ||
+         server.hasArg("mqttBrokerHost") ||
+         server.hasArg("mqttEnabled");
 }
 
 void trimBuffer(char* value) {
@@ -156,6 +158,11 @@ void WebServerService::setUiMode(UiMode mode) {
   _uiMode = mode;
 }
 
+void WebServerService::setEnterProgModeAction(EnterProgModeCallback cb, void* userData) {
+  _onEnterProgMode = cb;
+  _enterProgModeUserData = userData;
+}
+
 void WebServerService::setSettingsActions(GetSettingsCallback onGetSettings,
                                           GetPresentPeripheralCatalogCallback onGetPresentPeripheralCatalog,
                                           SaveSettingsCallback onSaveSettings,
@@ -186,6 +193,7 @@ void WebServerService::begin() {
   _server.on("/api/coins/base", HTTP_POST, [this]() { handleApiSetCoinBase(); });
   _server.on("/api/bills/recycler/base", HTTP_POST, [this]() { handleApiSetBillRecyclerBase(); });
   _server.on("/api/remote/change", HTTP_POST, [this]() { handleApiSaveRemoteSnapshot(); });
+  _server.on("/api/mode/prog", HTTP_POST, [this]() { handleApiEnterProgMode(); });
   _server.onNotFound([this]() { _server.send(404, "text/plain", "Not found"); });
 
   _server.begin();
@@ -616,8 +624,19 @@ void WebServerService::handleStatusPage() {
 )HTML";
 
   String page(PAGE);
-  page.replace("<!--PROG_MENU_BUTTON-->",
-               (_uiMode == UI_MODE_PROG) ? "<a class=\"button\" href=\"/\">Menu</a>" : "");
+  if (_uiMode == UI_MODE_PROG) {
+    page.replace("<!--PROG_MENU_BUTTON-->",
+      "<a class=\"button\" href=\"/settings\">Impostazioni</a>"
+      " <a class=\"button\" href=\"/\">Menu</a>");
+  } else {
+    page.replace("<!--PROG_MENU_BUTTON-->",
+      "<button style=\"font-family:Consolas,Menlo,monospace;font-size:13px;"
+      "padding:8px 12px;background:#d97706;color:#fff;border:0;border-radius:8px;cursor:pointer;\""
+      " onclick=\"this.disabled=true;this.textContent='Riavvio...';"
+      "fetch('/api/mode/prog',{method:'POST'})"
+      ".catch(()=>{this.disabled=false;this.textContent='Modalita PROG';})\""
+      ">Modalita PROG</button>");
+  }
   _server.send(200, "text/html", page);
 }
 
@@ -727,6 +746,19 @@ void WebServerService::handleSettingsPage() {
         <div class="secret-field">
           <input id="apiKey" type="password" placeholder="opzionale ma consigliata">
           <button id="toggleApiKey" class="secret-toggle" type="button">Mostra</button>
+        </div>
+      </div>
+      <h3 class="section-title">MQTT (EMQX)</h3>
+      <div class="section-note">Abilita MQTT per ricevere comandi in push dal broker EMQX invece del polling HTTP.</div>
+      <div class="row"><label><input id="mqttEnabled" type="checkbox"> Abilita MQTT</label></div>
+      <div class="row"><label for="mqttBrokerHost">Broker host</label><input id="mqttBrokerHost" type="text" placeholder="xxxx.ala.eu-central-1.emqxsl.com"></div>
+      <div class="row"><label for="mqttBrokerPort">Porta</label><input id="mqttBrokerPort" type="number" min="1" max="65535" value="1883"></div>
+      <div class="row"><label for="mqttUsername">Username</label><input id="mqttUsername" type="text" placeholder="username EMQX"></div>
+      <div class="row">
+        <label for="mqttPassword">Password</label>
+        <div class="secret-field">
+          <input id="mqttPassword" type="password" placeholder="password EMQX">
+          <button id="toggleMqttPassword" class="secret-toggle" type="button">Mostra</button>
         </div>
       </div>
       <div class="row row-top">
@@ -1346,6 +1378,11 @@ void WebServerService::handleSettingsPage() {
       document.getElementById('serverUrl').value = s.serverUrl || '';
       document.getElementById('locationCode').value = s.locationCode || '';
       document.getElementById('apiKey').value = s.apiKey || '';
+      document.getElementById('mqttEnabled').checked = !!s.mqttEnabled;
+      document.getElementById('mqttBrokerHost').value = s.mqttBrokerHost || '';
+      document.getElementById('mqttBrokerPort').value = s.mqttBrokerPort || 1883;
+      document.getElementById('mqttUsername').value = s.mqttUsername || '';
+      document.getElementById('mqttPassword').value = s.mqttPassword || '';
       refreshRoutingAssignments(s);
       document.getElementById('status').textContent = data.ok ? 'Impostazioni caricate' : ('Errore: ' + (data.message || 'lettura'));
       await loadWifiNetworks(s.wifiSsid || '');
@@ -1366,6 +1403,11 @@ void WebServerService::handleSettingsPage() {
       params.set('serverUrl', document.getElementById('serverUrl').value);
       params.set('locationCode', document.getElementById('locationCode').value);
       params.set('apiKey', document.getElementById('apiKey').value);
+      params.set('mqttEnabled', document.getElementById('mqttEnabled').checked ? '1' : '0');
+      params.set('mqttBrokerHost', document.getElementById('mqttBrokerHost').value);
+      params.set('mqttBrokerPort', document.getElementById('mqttBrokerPort').value);
+      params.set('mqttUsername', document.getElementById('mqttUsername').value);
+      params.set('mqttPassword', document.getElementById('mqttPassword').value);
       params.set('hopperAlbericiDiscriminatorMask', hopperModel1Mask);
       params.set('hopperAlbericiHopperCdMask', hopperModel2Mask);
       params.set('hopperSuzoEvolutionMask', hopperModel3Mask);
@@ -1478,6 +1520,7 @@ void WebServerService::handleSettingsPage() {
     syncWifiManualVisibility();
     initSecretToggle('wifiPass', 'toggleWifiPass');
     initSecretToggle('apiKey', 'toggleApiKey');
+    initSecretToggle('mqttPassword', 'toggleMqttPassword');
 
     loadSettings().catch(() => {
       document.getElementById('status').textContent = 'Errore rete durante caricamento';
@@ -1775,6 +1818,17 @@ void WebServerService::handleApiSaveRemoteSnapshot() {
   _server.send(ok ? 200 : 500, "application/json", out);
 }
 
+void WebServerService::handleApiEnterProgMode() {
+  // Invia la risposta prima di chiamare la callback perche quest'ultima
+  // causa un riavvio immediato del dispositivo (ESP.restart).
+  _server.send(200, "application/json", "{\"ok\":true,\"message\":\"riavvio in modalita PROG\"}");
+  delay(120);
+  if (_onEnterProgMode) {
+    String msg;
+    _onEnterProgMode(msg, _enterProgModeUserData);
+  }
+}
+
 void WebServerService::handleApiLogs() {
   uint16_t limit = 100;
   if (_server.hasArg("limit")) {
@@ -1850,7 +1904,17 @@ void WebServerService::appendSettingsJson(String& out,
   appendJsonEscaped(out, settings.locationCode);
   out += "\",\"apiKey\":\"";
   appendJsonEscaped(out, settings.apiKey);
-  out += "\",\"dbHost\":\"";
+  out += "\",\"mqttBrokerHost\":\"";
+  appendJsonEscaped(out, settings.mqttBrokerHost);
+  out += "\",\"mqttBrokerPort\":";
+  out += String((unsigned)settings.mqttBrokerPort);
+  out += ",\"mqttUsername\":\"";
+  appendJsonEscaped(out, settings.mqttUsername);
+  out += "\",\"mqttPassword\":\"";
+  appendJsonEscaped(out, settings.mqttPassword);
+  out += "\",\"mqttEnabled\":";
+  out += (settings.mqttEnabled ? "true" : "false");
+  out += ",\"dbHost\":\"";
   appendJsonEscaped(out, settings.dbHost);
   out += "\",\"dbPort\":";
   out += String((unsigned)settings.dbPort);
@@ -1921,6 +1985,32 @@ bool WebServerService::parseSettingsFromRequest(AppSettings& out, String& messag
   copyBounded(_server.arg("remoteEventUrl"), out.remoteEventUrl, sizeof(out.remoteEventUrl));
   copyBounded(_server.arg("locationCode"), out.locationCode, sizeof(out.locationCode));
   copyBounded(_server.arg("apiKey"), out.apiKey, sizeof(out.apiKey));
+  copyBounded(_server.arg("mqttBrokerHost"), out.mqttBrokerHost, sizeof(out.mqttBrokerHost));
+  copyBounded(_server.arg("mqttUsername"), out.mqttUsername, sizeof(out.mqttUsername));
+  copyBounded(_server.arg("mqttPassword"), out.mqttPassword, sizeof(out.mqttPassword));
+  {
+    const String mqttPortStr = _server.arg("mqttBrokerPort");
+    const long mqttPort = mqttPortStr.length() > 0 ? mqttPortStr.toInt() : 1883;
+    out.mqttBrokerPort = (mqttPort > 0 && mqttPort <= 65535) ? (uint16_t)mqttPort : 1883;
+  }
+  {
+    const String mqttEnStr = _server.arg("mqttEnabled");
+    out.mqttEnabled = (mqttEnStr == "1" || mqttEnStr == "true" || mqttEnStr == "on");
+  }
+  trimBuffer(out.mqttBrokerHost);
+  {
+    static const char* const kMqttSchemes[] = {
+      "mqtts://", "mqtt://", "https://", "http://", "ssl://", "tls://"
+    };
+    for (size_t i = 0; i < sizeof(kMqttSchemes) / sizeof(kMqttSchemes[0]); i++) {
+      const size_t slen = strlen(kMqttSchemes[i]);
+      if (strncmp(out.mqttBrokerHost, kMqttSchemes[i], slen) == 0) {
+        memmove(out.mqttBrokerHost, out.mqttBrokerHost + slen,
+                strlen(out.mqttBrokerHost) - slen + 1);
+        break;
+      }
+    }
+  }
   copyBounded(_server.arg("dbHost"), out.dbHost, sizeof(out.dbHost));
   copyBounded(_server.arg("dbName"), out.dbName, sizeof(out.dbName));
   copyBounded(_server.arg("dbUser"), out.dbUser, sizeof(out.dbUser));

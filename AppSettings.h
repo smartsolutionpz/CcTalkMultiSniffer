@@ -200,6 +200,9 @@ struct AppSettings {
   static const size_t kDbPassSize = 96;
   static const size_t kLocationCodeSize = 15;
   static const size_t kApiKeySize = 65;
+  static const size_t kMqttBrokerHostSize = 80;
+  static const size_t kMqttUsernameSize = 33;
+  static const size_t kMqttPasswordSize = 65;
 
   char wifiSsid[kWifiSsidSize] = {0};
   char wifiPass[kWifiPassSize] = {0};
@@ -213,6 +216,11 @@ struct AppSettings {
   char dbPass[kDbPassSize] = {0};
   char locationCode[kLocationCodeSize] = {0};
   char apiKey[kApiKeySize] = {0};
+  char mqttBrokerHost[kMqttBrokerHostSize] = {0};
+  uint16_t mqttBrokerPort = 1883;
+  char mqttUsername[kMqttUsernameSize] = {0};
+  char mqttPassword[kMqttPasswordSize] = {0};
+  bool mqttEnabled = false;
   // Campi legacy mantenuti per compatibilita con configurazioni salvate
   // precedenti all'introduzione dell'assegnazione modello-per-indirizzo.
   uint8_t hopperModel = HOPPER_MODEL_ALBERICI_DISCRIMINATOR;
@@ -249,6 +257,11 @@ struct AppSettings {
     memset(dbPass, 0, sizeof(dbPass));
     memset(locationCode, 0, sizeof(locationCode));
     memset(apiKey, 0, sizeof(apiKey));
+    memset(mqttBrokerHost, 0, sizeof(mqttBrokerHost));
+    mqttBrokerPort = 8883;
+    memset(mqttUsername, 0, sizeof(mqttUsername));
+    memset(mqttPassword, 0, sizeof(mqttPassword));
+    mqttEnabled = false;
     hopperModel = HOPPER_MODEL_ALBERICI_DISCRIMINATOR;
     billValidatorModel = BILL_VALIDATOR_MODEL_MD100;
     hopperAlbericiDiscriminatorMask = kAllHopperMask;

@@ -45,6 +45,7 @@
 #if defined(ARDUINO_ARCH_ESP32)
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <Preferences.h>
 #endif
 
 #include "CcTalkBusSniffer.h"
@@ -92,10 +93,12 @@ enum ViewMode : uint8_t {
 
 // Modalita di boot del firmware:
 // - RUN: esecuzione normale con servizi attivi
-// - PROG: modalita configurazione, privilegiando l'accesso locale via AP/web
+// - PROG: modalita configurazione, con access point WiFi
+// - PROG_NO_AP: modalita configurazione, WiFi STA (senza access point)
 enum BootMode : uint8_t {
   BOOT_MODE_RUN = 0,
-  BOOT_MODE_PROG = 1
+  BOOT_MODE_PROG = 1,
+  BOOT_MODE_PROG_NO_AP = 2
 };
 
 // Stream "muto": implementa l'interfaccia Stream ma scarta tutto l'output.
@@ -224,6 +227,10 @@ static bool g_deviceSeen[256] = {false};
 static uint16_t g_detectedDeviceCount = 0;
 static ViewMode g_viewMode = VIEW_INFO_AND_COUNTER_INC;
 static BootMode g_bootMode = BOOT_MODE_RUN;
+static inline bool isProgMode() {
+  return g_bootMode == BOOT_MODE_PROG || g_bootMode == BOOT_MODE_PROG_NO_AP;
+}
+
 static bool g_economicTotalsValid = false;
 static EconomicTotals g_lastEconomicTotals;
 static EconomicTotals g_persistentBaseTotals;
@@ -263,13 +270,9 @@ static volatile uint32_t g_lastCcTalkActivityMs = 0;
 static bool g_progButtonPrevPressed = false;
 static bool g_meshStartupDeferredLogged = false;
 static uint8_t g_gpioExpanderPort = 0xFF; // stato porta PCF8574: tutti i pin alti (LED off, button input)
-// Override del boot mode conservato attraverso il solo reboot software:
-// permette al pulsante di richiedere PROG/RUN anche durante il normale run.
-#if defined(ARDUINO_ARCH_ESP32)
-RTC_DATA_ATTR static int8_t g_bootModeOverride = -1;
-#else
+// Override del boot mode: persistito su NVS per sopravvivere a qualsiasi tipo
+// di reset (incluso SW_CPU_RESET su ESP32-C6 dove RTC_DATA_ATTR non e affidabile).
 static int8_t g_bootModeOverride = -1;
-#endif
 
 #if defined(ARDUINO_ARCH_ESP32)
 static TaskHandle_t g_snifferTaskHandle = nullptr;
@@ -366,6 +369,7 @@ static void pollProgrammingModeButton();
 static void applyRuntimeNetworkSettings();
 static void requestBootModeRestart(BootMode targetMode, const char* reason);
 static void enterProgrammingMode();
+static void enterProgrammingModeNoAp();
 static void enterRunMode();
 static void loadAppSettings();
 static void selectDeviceModelsFromSettings();
@@ -643,6 +647,30 @@ static void onServiceLog(const char* line, void* user) {
   logRuntimeLine(line, true);
 }
 
+#if defined(ARDUINO_ARCH_ESP32)
+static const char* const kBootNs  = "ccms_boot";
+static const char* const kBootKey = "ovr";
+
+static void saveBootOverride(int8_t mode) {
+  Preferences prefs;
+  if (prefs.begin(kBootNs, false)) {
+    prefs.putChar(kBootKey, mode);
+    prefs.end();
+  }
+}
+
+static int8_t loadAndClearBootOverride() {
+  Preferences prefs;
+  int8_t val = -1;
+  if (prefs.begin(kBootNs, false)) {
+    val = prefs.getChar(kBootKey, -1);
+    if (val != -1) prefs.remove(kBootKey);
+    prefs.end();
+  }
+  return val;
+}
+#endif
+
 static void detectBootMode() {
   // Il pin viene letto subito all'avvio, dopo un breve debounce, per decidere
   // se il firmware debba partire in esecuzione normale o in configurazione.
@@ -654,8 +682,14 @@ static void detectBootMode() {
   delay(appconfig::PROG_MODE_DEBOUNCE_MS);
   const bool buttonPressed = readProgButtonRaw();
 
+#if defined(ARDUINO_ARCH_ESP32)
+  g_bootModeOverride = loadAndClearBootOverride();
+#endif
+
   if (g_bootModeOverride == (int8_t)BOOT_MODE_PROG) {
     g_bootMode = BOOT_MODE_PROG;
+  } else if (g_bootModeOverride == (int8_t)BOOT_MODE_PROG_NO_AP) {
+    g_bootMode = BOOT_MODE_PROG_NO_AP;
   } else if (g_bootModeOverride == (int8_t)BOOT_MODE_RUN) {
     g_bootMode = BOOT_MODE_RUN;
   } else {
@@ -672,12 +706,24 @@ static void applyRuntimeNetworkSettings() {
   g_remoteRegistro.setEndpointUrl(g_appSettings.remoteEventUrl);
   g_remoteRegistro.setLocationCode(g_appSettings.locationCode);
   g_remoteRegistro.setApiKey(g_appSettings.apiKey);
+  if (g_appSettings.mqttEnabled && g_appSettings.mqttBrokerHost[0] != '\0') {
+    g_remoteRegistro.setMqttEnabled(true);
+    g_remoteRegistro.setMqttConfig(g_appSettings.mqttBrokerHost,
+                                    g_appSettings.mqttBrokerPort,
+                                    g_appSettings.mqttUsername,
+                                    g_appSettings.mqttPassword);
+  } else {
+    g_remoteRegistro.setMqttEnabled(false);
+  }
 }
 
 static void requestBootModeRestart(BootMode targetMode, const char* reason) {
   if (g_bootMode == targetMode) return;
 
   g_bootModeOverride = (int8_t)targetMode;
+#if defined(ARDUINO_ARCH_ESP32)
+  saveBootOverride(g_bootModeOverride);
+#endif
   if (reason && reason[0] != '\0') {
     logRuntimeLine(reason, true);
   }
@@ -692,6 +738,12 @@ static void requestBootModeRestart(BootMode targetMode, const char* reason) {
   if (targetMode == BOOT_MODE_PROG) {
     g_web.setUiMode(ccms::WebServerService::UI_MODE_PROG);
     g_wifi.beginApOnly();
+    g_cloud.setEnabled(false);
+    g_remoteRegistro.setEnabled(false);
+    g_mesh.begin(false);
+  } else if (targetMode == BOOT_MODE_PROG_NO_AP) {
+    g_web.setUiMode(ccms::WebServerService::UI_MODE_PROG);
+    g_wifi.begin();
     g_cloud.setEnabled(false);
     g_remoteRegistro.setEnabled(false);
     g_mesh.begin(false);
@@ -721,6 +773,11 @@ static void enterProgrammingMode() {
                          "[MODE] riavvio richiesto dal pulsante: accesso modalita PROG");
 }
 
+static void enterProgrammingModeNoAp() {
+  requestBootModeRestart(BOOT_MODE_PROG_NO_AP,
+                         "[MODE] riavvio richiesto dalla console: accesso modalita PROG (no AP)");
+}
+
 static void enterRunMode() {
   requestBootModeRestart(BOOT_MODE_RUN,
                          "[MODE] riavvio richiesto dal pulsante: ritorno a modalita RUN");
@@ -734,7 +791,7 @@ static void pollProgrammingModeButton() {
     if (buttonPressed != g_progButtonPrevPressed) {
       g_progButtonPrevPressed = buttonPressed;
       if (buttonPressed) {
-        if (g_bootMode == BOOT_MODE_PROG) enterRunMode();
+        if (isProgMode()) enterRunMode();
         else enterProgrammingMode();
       }
     }
@@ -1249,13 +1306,13 @@ static bool onWebSaveSettings(const ccms::AppSettings& in, String& message, void
   g_settingsLoaded = true;
   selectDeviceModelsFromSettings();
 
-  if (g_bootMode != BOOT_MODE_PROG) {
+  if (!isProgMode()) {
     applyRuntimeNetworkSettings();
   }
 
   if (modelChanged) {
     message = "impostazioni salvate; nuovi modelli periferiche applicati subito";
-  } else if (g_bootMode == BOOT_MODE_PROG) {
+  } else if (isProgMode()) {
     message = counterRoutingChanged
                   ? "impostazioni salvate; instradamento contatori applicato subito; riavvia il dispositivo per applicare rete e registro remoto"
                   : "impostazioni salvate; riavvia il dispositivo per applicare rete e registro remoto";
@@ -1399,6 +1456,7 @@ static void printConsoleHelp() {
   Serial.println(F("  s -> stato RAM periferiche"));
   Serial.println(F("  r -> reset impostazioni registro remoto + reboot"));
   Serial.println(F("  x -> reset totale impostazioni + reboot"));
+  Serial.println(F("  p -> entra in modalita PROG (WiFi STA, no AP)"));
   Serial.println(F("  h/? -> help"));
 #endif
 }
@@ -2269,7 +2327,28 @@ static bool onRemoteMasterRequest(const char* command,
     snprintf(line, sizeof(line),
              "[REMOTE_DB] richiesta master cmd=%s senza payload",
              g_remoteMasterRuntimeCommand);
-    responseMessage = "snapshot corrente acquisita";
+    // Costruisce il JSON con i contatori economici attuali (valori in centesimi).
+    // Il prefisso '{' viene riconosciuto da mqttPublishResponse per includerlo
+    // come campo "data" invece di "message" stringa.
+    const int64_t coinLevelCents =
+        currentCoinLevelCentsFromTotals(g_lastEconomicTotals);
+    char dataJson[384] = {0};
+    snprintf(dataJson, sizeof(dataJson),
+             "{\"banconoteInCents\":%lu"
+             ",\"moneteInCents\":%lu"
+             ",\"moneteOutCents\":%lu"
+             ",\"banconoteOutCents\":%lu"
+             ",\"cassaCents\":%lu"
+             ",\"coinLevelCents\":%ld"
+             ",\"recyclerCents\":%lu}",
+             (unsigned long)g_lastEconomicTotals.cntotBanconoteInCents,
+             (unsigned long)g_lastEconomicTotals.cntotMoneteInCents,
+             (unsigned long)g_lastEconomicTotals.cntotMoneteOutCents,
+             (unsigned long)g_lastEconomicTotals.cntotBanconoteOutCents,
+             (unsigned long)g_lastEconomicTotals.cassaCents,
+             (long)coinLevelCents,
+             (unsigned long)g_lastEconomicTotals.recyclerInventoryCents);
+    responseMessage = dataJson;
   }
   logRuntimeLine(line, true);
   return true;
@@ -2737,6 +2816,17 @@ static bool applyCurrentCoinLevelAsBase(const char* successLogLine,
                                   message);
 }
 
+static bool onWebEnterProgMode(String& message, void* userData) {
+  (void)userData;
+  if (g_bootMode != BOOT_MODE_RUN) {
+    message = "gia in modalita PROG";
+    return false;
+  }
+  message = "riavvio in modalita PROG (no AP)";
+  enterProgrammingModeNoAp();
+  return true;
+}
+
 static bool onWebResetCounters(String& message, void* userData) {
   (void)userData;
   return applyCurrentCoinLevelAsBase(
@@ -2879,6 +2969,10 @@ static void handleConsoleCommands() {
       case 'X':
         factoryResetSettingsFromSerial();
         break;
+      case 'p':
+      case 'P':
+        if (g_bootMode == BOOT_MODE_RUN) enterProgrammingModeNoAp();
+        break;
       case 'h':
       case 'H':
       case '?':
@@ -2990,7 +3084,7 @@ static void initNetworkServices() {
   // - WebServerService espone configurazione e monitoraggio
   g_systemStatus.attachLogOutput(&Serial);
   g_wifi.setLogHook(onWifiLog, nullptr);
-  g_web.setUiMode((g_bootMode == BOOT_MODE_PROG)
+  g_web.setUiMode(isProgMode()
                       ? ccms::WebServerService::UI_MODE_PROG
                       : ccms::WebServerService::UI_MODE_STATUS);
   g_web.setActions(onWebResetCounters,
@@ -3003,11 +3097,12 @@ static void initNetworkServices() {
                            onWebSaveSettings,
                            onWebTestConnection,
                            nullptr);
+  g_web.setEnterProgModeAction(onWebEnterProgMode, nullptr);
 
   if (g_bootMode == BOOT_MODE_PROG) {
     g_wifi.beginApOnly();
   } else {
-    g_wifi.begin();
+    g_wifi.begin();  // RUN e PROG_NO_AP usano entrambi STA
   }
 
   g_web.begin();
@@ -3029,7 +3124,7 @@ static void initTelemetryAndMeshServices() {
   g_mesh.setLogHook(onServiceLog, nullptr);
   g_mesh.setHeartbeatIntervalMs(appconfig::MESH_HEARTBEAT_INTERVAL_MS);
 
-  if (g_bootMode == BOOT_MODE_PROG) {
+  if (isProgMode()) {
     g_cloud.setEnabled(false);
     g_remoteRegistro.setEnabled(false);
     g_mesh.begin(false);
@@ -3174,7 +3269,7 @@ static void serviceAuxOnce() {
 }
 
 static void serviceDeferredMeshStartup() {
-  if (g_bootMode == BOOT_MODE_PROG) return;
+  if (isProgMode()) return;
   if (!appconfig::MESH_ENABLED) return;
   if (g_mesh.ready()) return;
 
@@ -3308,11 +3403,14 @@ static void printStartupBanner() {
   Serial.println(F("Modelli Hopper: configurazione per indirizzo da modalita PROG"));
   Serial.println(F("Modelli Bill Validator: configurazione per indirizzo da modalita PROG"));
   if (g_bootMode == BOOT_MODE_PROG) {
-    Serial.println(F("Boot mode: PROG"));
+    Serial.println(F("Boot mode: PROG (AP attivo)"));
     Serial.print(F("Accesso PROG: GPIO"));
     Serial.print(appconfig::PROG_MODE_BUTTON_PIN);
     Serial.println(F(" LOW al boot o pulsante premuto in RUN"));
     Serial.println(F("Apri http://192.168.4.1 per Impostazioni/Stato"));
+  } else if (g_bootMode == BOOT_MODE_PROG_NO_AP) {
+    Serial.println(F("Boot mode: PROG (WiFi STA, no AP)"));
+    Serial.println(F("Apri http://<IP_dispositivo> per Impostazioni/Stato"));
   } else {
     Serial.println(F("Boot mode: RUN"));
   }
@@ -3338,6 +3436,12 @@ static void initializeApplication() {
 
 void setup() {
   Serial.begin(LOG_BAUD);
+#if defined(ARDUINO_ARCH_ESP32)
+  // NetworkClient su ESP32-C6 / pioarduino chiama setSocketOption() anche
+  // quando il socket non e ancora aperto (fd=0), generando un falso [E].
+  // Il comportamento funzionale e corretto; silenzio solo questo tag.
+  esp_log_level_set("NetworkClient", ESP_LOG_NONE);
+#endif
   initializeApplication();
   printStartupBanner();
   printConsoleHelp();

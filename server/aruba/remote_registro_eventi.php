@@ -24,6 +24,14 @@ gr_method_or_405(['GET', 'POST']);
 gr_require_local_or_fallback('config.php', 'web/api-5/config.php');
 gr_require_local_or_fallback('auth.php', 'web/api-5/auth.php');
 require_once __DIR__ . '/RemoteRegistroEventiApi.php';
+require_once __DIR__ . '/MqttPublisher.php';
+
+function buildMqttPublisher(): ?MqttPublisher {
+    if (!defined('EMQX_API_BASE_URL') || !defined('EMQX_APP_ID') || !defined('EMQX_APP_SECRET')) {
+        return null;
+    }
+    return new MqttPublisher(EMQX_API_BASE_URL, EMQX_APP_ID, EMQX_APP_SECRET);
+}
 
 try {
     $pdo = getDatabaseConnection();
@@ -51,8 +59,41 @@ try {
         $mode = strtolower(trim((string) ($payload['mode'] ?? 'legacy')));
         if ($mode === 'request') {
             $result = $api->upsertRequest($payload);
+            // Pubblica il comando via MQTT (retained) se EMQX e configurato.
+            // Il device riceve il push istantaneamente invece di attendere il polling.
+            if (($result['id'] ?? null) !== null) {
+                $mqtt = buildMqttPublisher();
+                if ($mqtt !== null) {
+                    $mqtt->publishCommand(
+                        (string) ($payload['CodiceUbicazione'] ?? ''),
+                        (string) ($payload['Descrizione'] ?? 'SNAPSHOT'),
+                        (int)    $result['id'],
+                        (string) ($payload['Note1'] ?? '')
+                    );
+                }
+            }
         } elseif ($mode === 'response') {
             $result = $api->updateRequestResponse($payload);
+            // Cancella il retained message ora che il device ha risposto.
+            $mqtt = buildMqttPublisher();
+            if ($mqtt !== null) {
+                $mqtt->clearRetained((string) ($payload['CodiceUbicazione'] ?? ''));
+            }
+        } elseif ($mode === 'mqtt_response') {
+            // Endpoint chiamato dall'EMQX Rule Engine quando il device pubblica
+            // su devices/{locationCode}/responses.
+            // Payload atteso: {"requestId":42,"status":"served","message":"...","locationCode":"X"}
+            $responsePayload = [
+                'Id'               => (int) ($payload['requestId'] ?? 0),
+                'CodiceUbicazione' => (string) ($payload['locationCode'] ?? ''),
+                'Note2'            => (string) ($payload['status'] ?? 'error'),
+                'Note4'            => (string) ($payload['message'] ?? ''),
+            ];
+            $result = $api->updateRequestResponse($responsePayload);
+            $mqtt = buildMqttPublisher();
+            if ($mqtt !== null) {
+                $mqtt->clearRetained((string) ($payload['locationCode'] ?? ''));
+            }
         } else {
             $result = $api->insertEvent($payload);
         }

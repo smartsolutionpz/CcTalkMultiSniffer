@@ -6,6 +6,9 @@
 
 #include <Arduino.h>
 #include <stdint.h>
+#include <WiFiClient.h>
+#include <WiFiClientSecure.h>
+#include <PubSubClient.h>
 
 #include "../AppSettings.h"
 #include "../status/RingLog.h"
@@ -34,6 +37,8 @@ public:
   void setDbPollIntervalMs(uint32_t pollIntervalMs);
   void setLogHook(LogHook hook, void* userData);
   void setRequestApplyHook(RequestApplyHook hook, void* userData);
+  void setMqttConfig(const char* host, uint16_t port, const char* username, const char* password);
+  void setMqttEnabled(bool enabled);
 
   bool begin();
   void loop();
@@ -126,6 +131,15 @@ private:
   static void classifyOperation(const char* line, bool decoded, char* out, size_t outLen);
   static void buildDeviceLabel(char* out, size_t outLen);
 
+  // MQTT
+  bool mqttConnect();
+  void mqttLoop();
+  void mqttHandleMessage(const char* payload, unsigned int length);
+  void mqttPublishResponse(uint32_t requestId, bool ok, const char* message);
+  void mqttBuildCommandTopic(char* buf, size_t len) const;
+  void mqttBuildResponseTopic(char* buf, size_t len) const;
+  static void mqttCallbackDispatch(char* topic, byte* payload, unsigned int length);
+
   SystemStatus& _status;
   WifiService& _wifi;
   char _endpoint[AppSettings::kRemoteEventUrlSize] = {0};
@@ -158,6 +172,19 @@ private:
   void* _logHookUserData = nullptr;
   RequestApplyHook _requestApplyHook = nullptr;
   void* _requestApplyUserData = nullptr;
+
+  // MQTT state
+  WiFiClientSecure _mqttWifiClient;
+  PubSubClient _mqttClient;
+  bool _mqttEnabled = false;
+  char _mqttBrokerHost[AppSettings::kMqttBrokerHostSize] = {0};
+  uint16_t _mqttBrokerPort = 8883;
+  char _mqttUsername[AppSettings::kMqttUsernameSize] = {0};
+  char _mqttPassword[AppSettings::kMqttPasswordSize] = {0};
+  uint32_t _lastMqttReconnectAttemptMs = 0;
+  uint32_t _lastMqttLoopMs = 0;
+  // Pointer to self for static callback dispatch
+  static RemoteRegistroEventiService* _instance;
 };
 
 } // namespace ccms

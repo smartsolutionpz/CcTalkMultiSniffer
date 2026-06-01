@@ -41,6 +41,7 @@ public:
                                                       void* userData);
   typedef bool (*SaveSettingsCallback)(const AppSettings& in, String& message, void* userData);
   typedef bool (*TestConnectionCallback)(const AppSettings& in, String& message, void* userData);
+  typedef bool (*EnterProgModeCallback)(String& message, void* userData);
 
   explicit WebServerService(SystemStatus& status, WifiService& wifi, uint16_t port = 80);
 
@@ -59,6 +60,7 @@ public:
                           SaveSettingsCallback onSaveSettings,
                           TestConnectionCallback onTestConnection,
                           void* userData);
+  void setEnterProgModeAction(EnterProgModeCallback cb, void* userData);
 
 private:
   // Handler HTML/API.
@@ -76,6 +78,7 @@ private:
   void handleApiGetSettings();
   void handleApiSaveSettings();
   void handleApiTestConnection();
+  void handleApiEnterProgMode();
   void appendSettingsJson(String& out,
                           const AppSettings& settings,
                           bool presentCoinAcceptor,
@@ -103,6 +106,8 @@ private:
   SaveSettingsCallback _onSaveSettings = nullptr;
   TestConnectionCallback _onTestConnection = nullptr;
   void* _settingsUserData = nullptr;
+  EnterProgModeCallback _onEnterProgMode = nullptr;
+  void* _enterProgModeUserData = nullptr;
 };
 
 } // namespace ccms

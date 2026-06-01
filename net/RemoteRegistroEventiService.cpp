@@ -70,8 +70,10 @@ bool isUrlUnreserved(char c) {
 }
 } // namespace
 
+RemoteRegistroEventiService* RemoteRegistroEventiService::_instance = nullptr;
+
 RemoteRegistroEventiService::RemoteRegistroEventiService(SystemStatus& status, WifiService& wifi)
-    : _status(status), _wifi(wifi) {}
+    : _status(status), _wifi(wifi), _mqttClient(_mqttWifiClient) {}
 
 void RemoteRegistroEventiService::copyBounded(const char* in, char* out, size_t outLen) {
   if (!out || outLen == 0) return;
@@ -285,6 +287,29 @@ void RemoteRegistroEventiService::setRequestApplyHook(RequestApplyHook hook, voi
   _requestApplyUserData = userData;
 }
 
+void RemoteRegistroEventiService::setMqttConfig(const char* host, uint16_t port,
+                                                 const char* username, const char* password) {
+  const char* cleanHost = host ? host : "";
+  static const char* const kSchemes[] = {
+    "mqtts://", "mqtt://", "https://", "http://", "ssl://", "tls://"
+  };
+  for (size_t i = 0; i < sizeof(kSchemes) / sizeof(kSchemes[0]); i++) {
+    const size_t len = strlen(kSchemes[i]);
+    if (strncmp(cleanHost, kSchemes[i], len) == 0) {
+      cleanHost += len;
+      break;
+    }
+  }
+  copyBounded(cleanHost, _mqttBrokerHost, sizeof(_mqttBrokerHost));
+  _mqttBrokerPort = (port == 0) ? 8883 : port;
+  copyBounded(username, _mqttUsername, sizeof(_mqttUsername));
+  copyBounded(password, _mqttPassword, sizeof(_mqttPassword));
+}
+
+void RemoteRegistroEventiService::setMqttEnabled(bool enabled) {
+  _mqttEnabled = enabled;
+}
+
 void RemoteRegistroEventiService::updateActiveFlag() {
   _active = (_endpoint[0] != '\0' &&
              _locationCode[0] != '\0' &&
@@ -314,6 +339,16 @@ bool RemoteRegistroEventiService::begin() {
   if (!_active) {
     logLine("[REMOTE_DB] disattivato: URL non valido o codice ubicazione mancante");
     return false;
+  }
+
+  if (_mqttEnabled && _mqttBrokerHost[0] != '\0') {
+    _mqttWifiClient.setInsecure();
+    _mqttClient.setServer(_mqttBrokerHost, _mqttBrokerPort);
+    _mqttClient.setCallback(mqttCallbackDispatch);
+    _instance = this;
+    char line[160] = {0};
+    snprintf(line, sizeof(line), "[MQTT] configurato su %s:%u (TLS)", _mqttBrokerHost, _mqttBrokerPort);
+    logLine(line);
   }
 
   logLine("[REMOTE_DB] servizio request/response remoto attivo");
@@ -783,6 +818,11 @@ void RemoteRegistroEventiService::loop() {
 
   if ((uint32_t)(now - _wifiConnectedSinceMs) < appconfig::REMOTE_DB_WIFI_SETTLE_MS) return;
 
+  if (_mqttEnabled) {
+    mqttLoop();
+    return;
+  }
+
   if (_remoteBackoffUntilMs != 0 && (int32_t)(now - _remoteBackoffUntilMs) < 0) {
     if (!_remoteBackoffLogged) {
       char line[160] = {0};
@@ -888,6 +928,142 @@ void RemoteRegistroEventiService::loop() {
            (unsigned long)request.requestId,
            (serverMessage.length() > 0) ? serverMessage.c_str() : "errore sconosciuto");
   logLine(line);
+}
+
+void RemoteRegistroEventiService::mqttBuildCommandTopic(char* buf, size_t len) const {
+  snprintf(buf, len, "devices/%s/commands", _locationCode);
+}
+
+void RemoteRegistroEventiService::mqttBuildResponseTopic(char* buf, size_t len) const {
+  snprintf(buf, len, "devices/%s/responses", _locationCode);
+}
+
+bool RemoteRegistroEventiService::mqttConnect() {
+  char clientId[32] = {0};
+  snprintf(clientId, sizeof(clientId), "cctalk-%s", _locationCode);
+
+  const bool ok = _mqttClient.connect(clientId, _mqttUsername, _mqttPassword);
+  if (ok) {
+    char topic[80] = {0};
+    mqttBuildCommandTopic(topic, sizeof(topic));
+    _mqttClient.subscribe(topic, 1);
+    char line[192] = {0};
+    snprintf(line, sizeof(line), "[MQTT] connesso a %s, iscritto a %s", _mqttBrokerHost, topic);
+    logLine(line);
+    _consecutiveFailures = 0;
+  } else {
+    char line[128] = {0};
+    snprintf(line, sizeof(line), "[MQTT] connessione fallita, rc=%d", _mqttClient.state());
+    logLine(line);
+    _failureCount++;
+    if (_consecutiveFailures < 10) _consecutiveFailures++;
+  }
+  return ok;
+}
+
+void RemoteRegistroEventiService::mqttLoop() {
+  const uint32_t now = millis();
+
+  // Limita la frequenza delle operazioni MQTT per evitare di chiamare
+  // setSocketOption() centinaia di volte al secondo su ESP32-C6/C3 dove
+  // WiFiClientSecure::connected() tocca il socket ad ogni chiamata.
+  const uint32_t interval = _mqttClient.connected() ? 50u : 100u;
+  if ((uint32_t)(now - _lastMqttLoopMs) < interval) return;
+  _lastMqttLoopMs = now;
+
+  if (!_mqttClient.connected()) {
+    if ((uint32_t)(now - _lastMqttReconnectAttemptMs) >= 5000) {
+      _lastMqttReconnectAttemptMs = now;
+      mqttConnect();
+    }
+    return;
+  }
+  _mqttClient.loop();
+}
+
+void RemoteRegistroEventiService::mqttCallbackDispatch(char* topic, byte* payload,
+                                                        unsigned int length) {
+  (void)topic;
+  if (_instance) _instance->mqttHandleMessage((const char*)payload, length);
+}
+
+void RemoteRegistroEventiService::mqttHandleMessage(const char* payload, unsigned int length) {
+  if (!payload || length == 0 || length > 1020) return;
+
+  char buf[1024] = {0};
+  memcpy(buf, payload, length);
+  buf[length] = '\0';
+  String body(buf);
+
+  long requestId = responseLongValue(body, "requestId", 0);
+  if (requestId <= 0) {
+    // requestId opzionale: genera un ID transiente da millis per la deduplicazione.
+    requestId = (long)(millis() & 0x7FFFFFFFL) + 1;
+  }
+
+  const String commandStr = responseStringValue(body, "command");
+  const String payloadStr = responseStringValue(body, "payload");
+
+  PendingRequest request;
+  request.requestId = (uint32_t)requestId;
+  copyBounded(commandStr, request.command, sizeof(request.command));
+  copyBounded(payloadStr, request.requestPayload, sizeof(request.requestPayload));
+
+  String applyMessage;
+  bool applyOk = true;
+  if (_requestApplyHook) {
+    applyOk = _requestApplyHook(request.command,
+                                request.requestPayload,
+                                applyMessage,
+                                _requestApplyUserData);
+  } else if (request.command[0] == '\0' || strcmp(request.command, "SNAPSHOT") == 0) {
+    applyMessage = "snapshot corrente acquisita";
+  } else {
+    applyOk = false;
+    applyMessage = "nessun gestore richieste configurato";
+  }
+
+  mqttPublishResponse(request.requestId, applyOk, applyMessage.c_str());
+
+  if (applyOk) {
+    String saveMsg;
+    saveChangeEventInternal("mqtt", saveMsg);
+  }
+
+  char line[256] = {0};
+  snprintf(line, sizeof(line),
+           "[MQTT] request id=%lu cmd=%s esito=%s",
+           (unsigned long)request.requestId,
+           (request.command[0] != '\0') ? request.command : "SNAPSHOT",
+           applyOk ? "served" : "error");
+  logLine(line);
+
+  if (applyOk) _successCount++;
+  else _failureCount++;
+}
+
+void RemoteRegistroEventiService::mqttPublishResponse(uint32_t requestId, bool ok,
+                                                       const char* message) {
+  char topic[80] = {0};
+  mqttBuildResponseTopic(topic, sizeof(topic));
+
+  String payload = "{\"requestId\":";
+  payload += (unsigned long)requestId;
+  payload += ",\"status\":\"";
+  payload += ok ? "served" : "error";
+  payload += "\"";
+  if (message && message[0] == '{') {
+    // Il messaggio e gia un oggetto JSON: lo inserisce come campo "data".
+    payload += ",\"data\":";
+    payload += message;
+  } else {
+    payload += ",\"message\":\"";
+    appendJsonEscaped(payload, message ? message : "");
+    payload += "\"";
+  }
+  payload += "}";
+
+  _mqttClient.publish(topic, payload.c_str(), false);
 }
 
 } // namespace ccms
