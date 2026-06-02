@@ -115,6 +115,7 @@ static const uint32_t REMOTE_DB_RETRY_INTERVAL_MS = 60000;
 static const uint32_t REMOTE_DB_WIFI_SETTLE_MS = 3000;
 static const uint32_t REMOTE_DB_FAILURE_BACKOFF_BASE_MS = 60000;
 static const uint32_t REMOTE_DB_FAILURE_BACKOFF_MAX_MS = 300000;
+static const uint32_t MQTT_RECONNECT_INTERVAL_MS = 15000;
 static const uint32_t MESH_START_DELAY_MS = 3000;
 static const uint32_t MESH_RETRY_INTERVAL_MS = 5000;
 static const uint32_t MESH_HEARTBEAT_INTERVAL_MS = 1000;

@@ -115,6 +115,9 @@ public:
   bool logLineAt(uint8_t oldestIndex, char* out, size_t outLen) const;
   void clearLogs();
 
+  void setMqttConnected(bool connected);
+  bool mqttConnected() const;
+
 private:
   // Helper di formattazione monetaria.
   static void formatUnsignedEuro(uint32_t cents, char* out, size_t outLen);
@@ -127,6 +130,7 @@ private:
   Stream* _logOutput = nullptr;
   EconomicFields _economic;
   CcTalkFields _cctalk;
+  bool _mqttConnected = false;
   RecyclerInventoryEntry _recycler[kMaxRecyclerEntries];
   uint8_t _recyclerCount = 0;
   RingLog _ringLog;

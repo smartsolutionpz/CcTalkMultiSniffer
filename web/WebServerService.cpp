@@ -401,6 +401,7 @@ void WebServerService::handleStatusPage() {
   </div>
   <div class="grid">
     <div class="panel"><h2>WiFi</h2><pre id="wifi">loading...</pre></div>
+    <div class="panel"><h2>MQTT</h2><pre id="mqttStatus">loading...</pre></div>
     <div class="panel"><h2>Data e ora</h2><pre id="clock">loading...</pre></div>
     <div class="panel"><h2>ccTalk Bus</h2><pre id="bus">loading...</pre></div>
     <div class="panel">
@@ -480,6 +481,11 @@ void WebServerService::handleStatusPage() {
         wifi.push(`rssi: ${s(data.wifi.rssi)}`);
         document.getElementById('wifi').textContent = wifi.join('\n');
 
+        const mqtt = [];
+        const mqttConn = data.mqtt && data.mqtt.connected;
+        mqtt.push(`connected: ${mqttConn ? 'yes' : 'no'}`);
+        document.getElementById('mqttStatus').textContent = mqtt.join('\n');
+
         const clock = [];
         if (data.time && data.time.valid) {
           clock.push(`source: ${data.time.syncedFromInternet ? 'internet' : 'rtc'}`);
@@ -529,6 +535,7 @@ void WebServerService::handleStatusPage() {
       } catch (e) {
         document.getElementById('wifiIndicator').textContent = 'WiFi: stato non disponibile';
         document.getElementById('wifi').textContent = 'Errore fetch /api/status';
+        document.getElementById('mqttStatus').textContent = 'Errore fetch /api/status';
         document.getElementById('clock').textContent = 'Errore fetch /api/status';
       } finally {
         refreshInFlight = false;
@@ -1612,6 +1619,11 @@ void WebServerService::handleApiStatus() {
   appendJsonEscaped(out, ip);
   out += "\",\"rssi\":";
   out += String(_wifi.rssi());
+  out += "},";
+
+  out += "\"mqtt\":{";
+  out += "\"connected\":";
+  out += (_status.mqttConnected() ? "true" : "false");
   out += "},";
 
   out += "\"cctalk\":{";

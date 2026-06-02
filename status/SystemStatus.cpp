@@ -434,4 +434,25 @@ void SystemStatus::clearLogs() {
 #endif
 }
 
+void SystemStatus::setMqttConnected(bool connected) {
+#if defined(ARDUINO_ARCH_ESP32)
+  lock(_mux);
+#endif
+  _mqttConnected = connected;
+#if defined(ARDUINO_ARCH_ESP32)
+  unlock(_mux);
+#endif
+}
+
+bool SystemStatus::mqttConnected() const {
+#if defined(ARDUINO_ARCH_ESP32)
+  lock(_mux);
+#endif
+  const bool v = _mqttConnected;
+#if defined(ARDUINO_ARCH_ESP32)
+  unlock(_mux);
+#endif
+  return v;
+}
+
 } // namespace ccms

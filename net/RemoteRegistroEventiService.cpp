@@ -311,9 +311,13 @@ void RemoteRegistroEventiService::setMqttEnabled(bool enabled) {
 }
 
 void RemoteRegistroEventiService::updateActiveFlag() {
-  _active = (_endpoint[0] != '\0' &&
-             _locationCode[0] != '\0' &&
-             isSupportedUrl(_endpoint));
+  const bool httpActive = (_endpoint[0] != '\0' &&
+                           _locationCode[0] != '\0' &&
+                           isSupportedUrl(_endpoint));
+  const bool mqttActive = (_mqttEnabled &&
+                           _mqttBrokerHost[0] != '\0' &&
+                           _locationCode[0] != '\0');
+  _active = httpActive || mqttActive;
 }
 
 bool RemoteRegistroEventiService::begin() {
@@ -334,10 +338,12 @@ bool RemoteRegistroEventiService::begin() {
   _pendingAppliedRequestSignature[0] = '\0';
   _pendingAppliedRequestOk = false;
   _pendingAppliedResponseMessage[0] = '\0';
+  _lastMqttReconnectAttemptMs = 0;
+  _lastMqttLoopMs = 0;
 
   updateActiveFlag();
   if (!_active) {
-    logLine("[REMOTE_DB] disattivato: URL non valido o codice ubicazione mancante");
+    logLine("[REMOTE_DB] disattivato: endpoint/ubicazione e MQTT non configurati");
     return false;
   }
 
@@ -347,11 +353,15 @@ bool RemoteRegistroEventiService::begin() {
     _mqttClient.setCallback(mqttCallbackDispatch);
     _instance = this;
     char line[160] = {0};
-    snprintf(line, sizeof(line), "[MQTT] configurato su %s:%u (TLS)", _mqttBrokerHost, _mqttBrokerPort);
+    snprintf(line, sizeof(line), "[MQTT] configurato su %s:%u (TLS), intervallo riconnessione=%lums",
+             _mqttBrokerHost, _mqttBrokerPort,
+             (unsigned long)appconfig::MQTT_RECONNECT_INTERVAL_MS);
     logLine(line);
   }
 
-  logLine("[REMOTE_DB] servizio request/response remoto attivo");
+  if (_endpoint[0] != '\0') {
+    logLine("[REMOTE_DB] servizio request/response remoto attivo");
+  }
   return true;
 }
 
@@ -813,6 +823,7 @@ void RemoteRegistroEventiService::loop() {
     _wifiConnectedSinceMs = now;
     _lastAttemptMs = now;
     _lastDbPollMs = now;
+    if (_mqttEnabled) _lastMqttReconnectAttemptMs = 0;
     return;
   }
 
@@ -951,12 +962,14 @@ bool RemoteRegistroEventiService::mqttConnect() {
     snprintf(line, sizeof(line), "[MQTT] connesso a %s, iscritto a %s", _mqttBrokerHost, topic);
     logLine(line);
     _consecutiveFailures = 0;
+    _status.setMqttConnected(true);
   } else {
     char line[128] = {0};
     snprintf(line, sizeof(line), "[MQTT] connessione fallita, rc=%d", _mqttClient.state());
     logLine(line);
     _failureCount++;
     if (_consecutiveFailures < 10) _consecutiveFailures++;
+    _status.setMqttConnected(false);
   }
   return ok;
 }
@@ -972,7 +985,8 @@ void RemoteRegistroEventiService::mqttLoop() {
   _lastMqttLoopMs = now;
 
   if (!_mqttClient.connected()) {
-    if ((uint32_t)(now - _lastMqttReconnectAttemptMs) >= 5000) {
+    _status.setMqttConnected(false);
+    if ((uint32_t)(now - _lastMqttReconnectAttemptMs) >= appconfig::MQTT_RECONNECT_INTERVAL_MS) {
       _lastMqttReconnectAttemptMs = now;
       mqttConnect();
     }
