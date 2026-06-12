@@ -61,10 +61,20 @@ private:
   uint8_t* _pendingReq = nullptr;
   uint8_t  _pendingReqLen = 0;
   uint32_t _pendingReqMs = 0;
+  bool     _pendingReqCrc16 = false;
 
   // Dedup dell'ultimo evento emesso.
   bool _lastCrcValid = false;
   uint16_t _lastCrc = 0;
+
+  // Slot dedicato per richieste verso bill validator (addr 40-50).
+  // I BV JCM rispondono con ritardo: la pending principale viene sovrascritta
+  // dalle richieste agli hopper intermedie prima che il BV risponda.
+  uint8_t* _lastBvReqBuf = nullptr;
+  uint8_t  _lastBvReqLen = 0;
+  uint32_t _lastBvReqMs  = 0;
+  bool     _havePendingBvReq = false;
+  bool     _lastBvReqCrc16 = false;
 
   // Stato temporaneo per il caso MDCES (richiesta frame + risposta 1 byte).
   bool _expectMdcesByte = false;
@@ -80,7 +90,9 @@ private:
 
   void resetParser();
   void feedByte(uint8_t b);
-  void handleFrame(const uint8_t* raw, uint8_t n);
+  void handleFrame(const uint8_t* raw, uint8_t n, bool crc16);
+  // Emette frame con checksum non valido come transazione anomala (checksumOk=false).
+  void handleBadFrame(const uint8_t* raw, uint8_t n);
 
   // Heuristic semplici per distinguere richieste del master e risposte verso il master.
   bool isReqFromMaster(const uint8_t* raw) const;

@@ -151,6 +151,13 @@ bool CcTalkBillValidator::preloadRecyclerInventory(uint8_t addr,
   return true;
 }
 
+void CcTalkBillValidator::injectAcceptedEuro(uint8_t addr, uint32_t euros) {
+  BillValidatorState* s = mutableStateFor(addr);
+  if (!s || euros == 0) return;
+  s->present = true;
+  s->acceptedTotalEuro += euros;
+}
+
 void CcTalkBillValidator::resetState() {
   // L'array viene azzerato integralmente e poi ogni slot riceve il proprio
   // indirizzo logico, cosi le lookup restano O(1) senza strutture dinamiche.
@@ -294,6 +301,14 @@ void CcTalkBillValidator::updateState(const CcTalkTransaction& t) {
         applySmartPayoutRecyclerInventory(*state, req, resp);
         return;
 
+      case 0x20:
+        applyIproRecycleCurrencySetting(*state, req.data, req.dataLen);
+        return;
+
+      case 0x24:
+        applyIproRecyclerCurrent(*state, resp.data, resp.dataLen);
+        return;
+
       case 0x9F:
         if (resp.dataLen == 11) {
           // 0x9F restituisce un event counter e fino a 5 coppie evento.
@@ -378,6 +393,13 @@ void CcTalkBillValidator::dumpState(Stream& out) const {
       out.print(F("    inhibitMask: "));
       dumpHex(out, s.inhibitMask, s.inhibitMaskLen);
       out.println();
+    }
+    if (s.iproRecycleBoxMapValid) {
+      out.print(F("    iproRecycleBox1="));
+      out.print(s.iproRecycleBoxEuro[0]);
+      out.print(F(" EUR iproRecycleBox2="));
+      out.print(s.iproRecycleBoxEuro[1]);
+      out.println(F(" EUR"));
     }
     if (s.recyclerInventoryValid) {
       out.print(F("    recycler10="));
@@ -530,6 +552,19 @@ const __FlashStringHelper* CcTalkBillValidator::cmdDesc(uint8_t hdr) const {
       if (_dataset.payoutCommandMode == BILL_VALIDATOR_PAYOUT_COMMAND_VALUE32) {
         return F("request status (029/1D)");
       }
+      if (_dataset.recyclerInventoryMode == BILL_VALIDATOR_RECYCLER_INVENTORY_IPRO_BOX_COUNT) {
+        return F("request recycler status (029/1D)");
+      }
+      return CcTalkMaster::headerDesc(hdr);
+    case 0x20:
+      if (_dataset.recyclerInventoryMode == BILL_VALIDATOR_RECYCLER_INVENTORY_IPRO_BOX_COUNT) {
+        return F("modify recycle currency setting (032/20)");
+      }
+      return CcTalkMaster::headerDesc(hdr);
+    case 0x24:
+      if (_dataset.recyclerInventoryMode == BILL_VALIDATOR_RECYCLER_INVENTORY_IPRO_BOX_COUNT) {
+        return F("request recycle current count (036/24)");
+      }
       return CcTalkMaster::headerDesc(hdr);
     default:   return CcTalkMaster::headerDesc(hdr);
   }
@@ -597,6 +632,38 @@ void CcTalkBillValidator::printRequestPayload(Stream& out, const CcTalkFrame& re
         out.print(F(" target="));
         printMoneyCents(out, readU32LE(&req.data[4]));
         out.println();
+      }
+      return;
+
+    case 0x20:
+      if (_dataset.recyclerInventoryMode == BILL_VALIDATOR_RECYCLER_INVENTORY_IPRO_BOX_COUNT &&
+          req.data && req.dataLen >= 4) {
+        const uint8_t start = ((req.dataLen > 1) && (((uint8_t)(req.dataLen - 1) % 3u) == 0)) ? 1 : 0;
+        out.print(F("  payload recycleCurrency:"));
+        for (uint8_t pos = start; (uint8_t)(pos + 2u) < req.dataLen; pos = (uint8_t)(pos + 3u)) {
+          const uint16_t billType = readU16LE(&req.data[pos]);
+          const uint8_t box = req.data[pos + 2u];
+          uint8_t euro = 0;
+          out.print(F(" box"));
+          out.print(box);
+          out.print('=');
+          if (billType <= 255u && billTypeToEuro((uint8_t)billType, euro)) {
+            out.print(euro);
+            out.print(F("EUR"));
+          } else {
+            out.print(F("billType"));
+            out.print(billType);
+          }
+        }
+        out.println();
+      }
+      return;
+
+    case 0x24:
+      if (_dataset.recyclerInventoryMode == BILL_VALIDATOR_RECYCLER_INVENTORY_IPRO_BOX_COUNT &&
+          req.dataLen == 1) {
+        out.print(F("  payload boxSelector="));
+        out.println(req.data[0]);
       }
       return;
 
@@ -702,7 +769,7 @@ const __FlashStringHelper* CcTalkBillValidator::billEventLabel(uint8_t a, uint8_
   // Nel protocollo BV la coppia (A,B) ha semantica dipendente dal contesto:
   // A=tipo banconota / categoria evento, B=esito o sottocodice.
   if (isRecyclerStoredEvent(a, b)) return F("stored in recycler");
-  if (b == 0 && a >= 1) return F("credit to stacker/cashbox");
+  if (b == 0 && a >= 1) return F("accepted credit");
   if (b == 1 && a >= 1) return F("pending credit (escrow)");
 
   if (a != 0) return F("event non standard");
@@ -737,7 +804,7 @@ const __FlashStringHelper* CcTalkBillValidator::billEventLabel(uint8_t a, uint8_
 const __FlashStringHelper* CcTalkBillValidator::billEventClass(uint8_t a, uint8_t b) const {
   // Raggruppamento didattico degli eventi in categorie leggibili a colpo d'occhio.
   if (isRecyclerStoredEvent(a, b)) return F("Credit (Recycler)");
-  if (b == 0 && a >= 1) return F("Credit (Stacker/Cashbox)");
+  if (b == 0 && a >= 1) return F("Credit (Accepted)");
   if (b == 1 && a >= 1) return F("Pending Credit");
   if (a != 0) return F("Unknown");
 
@@ -973,16 +1040,21 @@ void CcTalkBillValidator::accumulateAcceptedBills(BillValidatorState& state, con
     uint8_t denom = 0;
     if (!billTypeToEuro(state, a, denom)) continue;
 
+    uint8_t iproRecyclerEuro = 0;
+    const bool iproRecyclerCredit =
+        isCashboxCreditEvent(a, b) && iproBillTypeToRecyclerEuro(state, a, iproRecyclerEuro);
+
     state.acceptedTotalEuro += denom;
     state.lastAcceptedValid = true;
     state.lastAcceptedBillType = a;
     state.lastAcceptedEuro = denom;
 
-    if (usesMd100RecyclerInventory() && isRecyclerStoredEvent(a, b)) {
-      applyRecyclerDelta(state, denom, +1);
+    if ((usesMd100RecyclerInventory() && isRecyclerStoredEvent(a, b)) ||
+        iproRecyclerCredit) {
+      applyRecyclerDelta(state, iproRecyclerCredit ? iproRecyclerEuro : denom, +1);
     }
 
-    if (isCashboxCreditEvent(a, b)) {
+    if (isCashboxCreditEvent(a, b) && !iproRecyclerCredit) {
       state.cashboxTotalEuro += denom;
       state.lastCashboxValid = true;
       state.lastCashboxEuro = denom;
@@ -1046,6 +1118,10 @@ bool CcTalkBillValidator::usesSmartPayoutRecyclerInventory() const {
   return _dataset.recyclerInventoryMode == BILL_VALIDATOR_RECYCLER_INVENTORY_NOTE_AMOUNT;
 }
 
+bool CcTalkBillValidator::usesIproRecyclerInventory() const {
+  return _dataset.recyclerInventoryMode == BILL_VALIDATOR_RECYCLER_INVENTORY_IPRO_BOX_COUNT;
+}
+
 void CcTalkBillValidator::accumulateMd100Dispense(BillValidatorState& state,
                                                   const CcTalkFrame& req) const {
   if (!usesMd100PayoutCommands()) return;
@@ -1080,7 +1156,9 @@ bool CcTalkBillValidator::applyRecyclerDelta(BillValidatorState& state,
   if (delta == 0) return false;
 
   if (!state.recyclerInventoryValid) {
-    if (!usesMd100RecyclerInventory() && !usesSmartPayoutRecyclerInventory()) {
+    if (!usesMd100RecyclerInventory() &&
+        !usesSmartPayoutRecyclerInventory() &&
+        !usesIproRecyclerInventory()) {
       return false;
     }
     state.recyclerCount10 = 0;
@@ -1116,6 +1194,84 @@ bool CcTalkBillValidator::applyRecyclerDelta(BillValidatorState& state,
 
   refreshRecyclerTotals(state);
   return true;
+}
+
+bool CcTalkBillValidator::applyIproRecycleCurrencySetting(BillValidatorState& state,
+                                                          const uint8_t* data,
+                                                          uint8_t len) const {
+  if (!usesIproRecyclerInventory() || !data || len < 3) return false;
+
+  uint8_t nextBoxEuro[2] = {0, 0};
+  bool any = false;
+  uint8_t pos = ((len > 1) && (((uint8_t)(len - 1) % 3u) == 0)) ? 1 : 0;
+
+  while ((uint8_t)(pos + 2u) < len) {
+    const uint16_t billType = readU16LE(&data[pos]);
+    const uint8_t box = data[pos + 2u];
+    uint8_t euro = 0;
+    if (box >= 1 && box <= 2 && billType <= 255u && billTypeToEuro((uint8_t)billType, euro)) {
+      nextBoxEuro[(uint8_t)(box - 1u)] = euro;
+      any = true;
+    }
+    pos = (uint8_t)(pos + 3u);
+  }
+
+  if (!any) return false;
+  state.iproRecycleBoxEuro[0] = nextBoxEuro[0];
+  state.iproRecycleBoxEuro[1] = nextBoxEuro[1];
+  state.iproRecycleBoxMapValid = true;
+  return true;
+}
+
+bool CcTalkBillValidator::applyIproRecyclerCurrent(BillValidatorState& state,
+                                                   const uint8_t* data,
+                                                   uint8_t len) const {
+  if (!usesIproRecyclerInventory() || !data || len < 4 || !state.iproRecycleBoxMapValid) {
+    return false;
+  }
+
+  const uint16_t countBox1 = readU16LE(&data[0]);
+  const uint16_t countBox2 = readU16LE(&data[2]);
+  const uint8_t euros[2] = {state.iproRecycleBoxEuro[0], state.iproRecycleBoxEuro[1]};
+  const uint16_t counts[2] = {countBox1, countBox2};
+
+  for (uint8_t i = 0; i < 2; i++) {
+    switch (euros[i]) {
+      case 10:
+        state.recyclerCount10 = counts[i];
+        break;
+      case 20:
+        state.recyclerCount20 = counts[i];
+        break;
+      case 50:
+        state.recyclerCount50 = counts[i];
+        break;
+      default:
+        break;
+    }
+  }
+
+  refreshRecyclerTotals(state);
+  state.recyclerInventoryValid = true;
+  return true;
+}
+
+bool CcTalkBillValidator::iproBillTypeToRecyclerEuro(const BillValidatorState& state,
+                                                     uint8_t billType,
+                                                     uint8_t& euro) const {
+  euro = 0;
+  if (!usesIproRecyclerInventory() || !state.iproRecycleBoxMapValid) return false;
+
+  uint8_t candidate = 0;
+  if (!billTypeToEuro(state, billType, candidate)) return false;
+
+  for (uint8_t i = 0; i < 2; i++) {
+    if (state.iproRecycleBoxEuro[i] == candidate) {
+      euro = candidate;
+      return true;
+    }
+  }
+  return false;
 }
 
 void CcTalkBillValidator::accumulateSmartPayoutStatus(BillValidatorState& state,
@@ -1527,6 +1683,17 @@ void CcTalkBillValidator::printResponse(Stream& out, uint8_t hostHdr, const CcTa
           out.print(F("  [MEM] Cassa="));
           out.print(state->cashboxTotalEuro);
           out.println(F(" EUR"));
+          if (state->recyclerInventoryValid) {
+            out.print(F("  [MEM] Recycler: 10EUR="));
+            out.print(state->recyclerCount10);
+            out.print(F(" 20EUR="));
+            out.print(state->recyclerCount20);
+            out.print(F(" 50EUR="));
+            out.print(state->recyclerCount50);
+            out.print(F(" total="));
+            out.print(state->recyclerInventoryTotalEuro);
+            out.println(F(" EUR"));
+          }
           out.print(F("  [MEM] dispensedTotal="));
           out.print(state->dispensedTotalEuro);
           out.println(F(" EUR"));
@@ -1618,6 +1785,47 @@ void CcTalkBillValidator::printResponse(Stream& out, uint8_t hostHdr, const CcTa
           dumpHex(out, resp.data, resp.dataLen);
           out.println();
         }
+      }
+      return;
+
+    case 0x20:
+      if (_dataset.recyclerInventoryMode != BILL_VALIDATOR_RECYCLER_INVENTORY_IPRO_BOX_COUNT) break;
+      out.println(F("ACK"));
+      {
+        const BillValidatorState* state = stateFor(resp.src);
+        if (state && state->iproRecycleBoxMapValid) {
+          out.print(F("  [MEM] iPRO recycler boxes: box1="));
+          out.print(state->iproRecycleBoxEuro[0]);
+          out.print(F(" EUR box2="));
+          out.print(state->iproRecycleBoxEuro[1]);
+          out.println(F(" EUR"));
+        }
+      }
+      return;
+
+    case 0x24:
+      if (_dataset.recyclerInventoryMode != BILL_VALIDATOR_RECYCLER_INVENTORY_IPRO_BOX_COUNT) break;
+      if (resp.dataLen >= 4) {
+        out.print(F("RecycleCurrent: box1="));
+        out.print(readU16LE(&resp.data[0]));
+        out.print(F(" box2="));
+        out.println(readU16LE(&resp.data[2]));
+        const BillValidatorState* state = stateFor(resp.src);
+        if (state && state->recyclerInventoryValid) {
+          out.print(F("  [MEM] RecyclerInventory saved: 10EUR="));
+          out.print(state->recyclerCount10);
+          out.print(F(" 20EUR="));
+          out.print(state->recyclerCount20);
+          out.print(F(" 50EUR="));
+          out.print(state->recyclerCount50);
+          out.print(F(" total="));
+          out.print(state->recyclerInventoryTotalEuro);
+          out.println(F(" EUR"));
+        }
+      } else {
+        out.print(F("0x24 raw: "));
+        dumpHex(out, resp.data, resp.dataLen);
+        out.println();
       }
       return;
 

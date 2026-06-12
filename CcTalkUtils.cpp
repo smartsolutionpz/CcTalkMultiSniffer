@@ -10,6 +10,44 @@ bool cctalkChecksumOk(const uint8_t* b, uint8_t n) {
   return (sum == 0);
 }
 
+static uint16_t crc16CcittUpdate(uint16_t crc, uint8_t x) {
+  crc ^= ((uint16_t)x << 8);
+  for (uint8_t j = 0; j < 8; j++) {
+    if (crc & 0x8000) crc = (uint16_t)((crc << 1) ^ 0x1021);
+    else              crc = (uint16_t)(crc << 1);
+  }
+  return crc;
+}
+
+static uint16_t cctalkFrameCrc16(const uint8_t* b, uint8_t n) {
+  if (!b || n < 5) return 0;
+
+  // Layout ccTalk CRC:
+  //   [Dest][Len][CRC LSB][Hdr][Data...][CRC MSB]
+  // Il CRC si calcola sul comando logico [Dest][Len][Hdr][Data...].
+  uint16_t crc = 0x0000;
+  crc = crc16CcittUpdate(crc, b[0]);
+  crc = crc16CcittUpdate(crc, b[1]);
+  crc = crc16CcittUpdate(crc, b[3]);
+  const uint8_t dataLen = b[1];
+  for (uint8_t i = 0; i < dataLen && (uint16_t)(4u + i) < (uint16_t)(n - 1u); i++) {
+    crc = crc16CcittUpdate(crc, b[4 + i]);
+  }
+  return crc;
+}
+
+bool cctalkCrc16Ok(const uint8_t* b, uint8_t n) {
+  // Il CRC-16 ccTalk non aggiunge un byte al frame: sostituisce il source
+  // con il CRC LSB e mette il CRC MSB nell'ultimo byte.
+  if (!b || n < 5) return false;
+  const uint8_t dataLen = b[1];
+  if ((uint16_t)n != (uint16_t)(5u + dataLen)) return false;
+
+  const uint16_t expected = cctalkFrameCrc16(b, n);
+  const uint16_t got = (uint16_t)b[2] | ((uint16_t)b[n - 1] << 8);
+  return got == expected;
+}
+
 uint16_t crc16_ibm_update(uint16_t crc, uint8_t a) {
   // CRC separato dal checksum ccTalk:
   // qui non valida il protocollo, ma genera una firma piu robusta per dedup.

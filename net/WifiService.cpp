@@ -149,6 +149,17 @@ bool WifiService::begin() {
   _lastLoggedStatusValid = false;
   _disconnectReasonPending = false;
 
+#if defined(CONFIG_IDF_TARGET_ESP32C6)
+  if (appconfig::WIFI_USE_EXTERNAL_ANTENNA) {
+    pinMode(3, OUTPUT);
+    digitalWrite(3, LOW);    // alimenta RF switch FM8625H
+    pinMode(14, OUTPUT);
+    digitalWrite(14, HIGH);  // seleziona antenna esterna
+    logLine("[WIFI] antenna: esterna (GPIO3=LOW GPIO14=HIGH)");
+  } else {
+    logLine("[WIFI] antenna: interna PCB");
+  }
+#endif
   WiFi.persistent(false);
   WiFi.disconnect(false, false);
   WiFi.mode(WIFI_STA);

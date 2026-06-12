@@ -66,7 +66,7 @@ const BillValidatorDataset kIproDataset = {
   nullptr,
   0,
   BILL_VALIDATOR_PAYOUT_COMMAND_NONE,
-  BILL_VALIDATOR_RECYCLER_INVENTORY_NONE,
+  BILL_VALIDATOR_RECYCLER_INVENTORY_IPRO_BOX_COUNT,
 };
 } // namespace
 

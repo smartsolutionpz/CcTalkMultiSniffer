@@ -86,9 +86,10 @@ static const bool RUN_BV_MANUAL_TESTS = false;
 // Ogni modalita cambia il livello di dettaglio stampato, ma non il modo
 // in cui lo stato interno viene aggiornato.
 enum ViewMode : uint8_t {
-  VIEW_ECONOMIC_COUNTERS = 1,
-  VIEW_ALL_RAW = 2,
-  VIEW_INFO_AND_COUNTER_INC = 3
+  VIEW_ECONOMIC_COUNTERS    = 1,
+  VIEW_ALL_RAW              = 2,
+  VIEW_INFO_AND_COUNTER_INC = 3,
+  VIEW_ANOMALIES            = 4   // solo frame con checksum errato o indirizzi non noti
 };
 
 // Modalita di boot del firmware:
@@ -235,6 +236,9 @@ static bool g_economicTotalsValid = false;
 static EconomicTotals g_lastEconomicTotals;
 static EconomicTotals g_persistentBaseTotals;
 static EconomicTotals g_sessionOffsetTotals;
+// Accumulatore crediti banconote JCM push-mode: il BV JCM (checksumOk=false)
+// bypassa il routing normale. Viene aggiunto direttamente in collectSessionEconomicRaw().
+static uint32_t g_jcmBillCreditCents = 0;
 static uint32_t g_coinLevelBaseCents = 0;
 static ccms::AppSettingsStore g_settingsStore;
 static ccms::AppSettings g_appSettings;
@@ -1453,6 +1457,7 @@ static void printConsoleHelp() {
   Serial.println(F("  1 -> totali cambiamonete"));
   Serial.println(F("  2 -> tutti i messaggi (con RAW REQ/RESP)"));
   Serial.println(F("  3 -> info periferiche + counter incrementato"));
+  Serial.println(F("  4 -> solo anomalie (checksum errato o indirizzi non noti)"));
   Serial.println(F("  s -> stato RAM periferiche"));
   Serial.println(F("  r -> reset impostazioni registro remoto + reboot"));
   Serial.println(F("  x -> reset totale impostazioni + reboot"));
@@ -1485,6 +1490,12 @@ static void setViewMode(ViewMode mode) {
       g_sniffer.setPrintMode(CcTalkBusSniffer::COMPACT);
 #if ENABLE_SERIAL_LOG
       Serial.println(F("View mode 3: info periferiche + counter incrementato"));
+#endif
+      return;
+    case VIEW_ANOMALIES:
+      g_sniffer.setPrintMode(CcTalkBusSniffer::FULL);
+#if ENABLE_SERIAL_LOG
+      Serial.println(F("View mode 4: anomalie (checksum errato / indirizzi non noti)"));
 #endif
       return;
   }
@@ -1713,6 +1724,16 @@ static uint8_t transactionAddress(const CcTalkTransaction& t) {
   return 0;
 }
 
+// Restituisce true se l'indirizzo appartiene a un dispositivo ccTalk noto
+// (master, hopper, bill validator, coin acceptor). Usato dal filtro anomalie.
+static bool isCctalkKnownDeviceAddress(uint8_t addr) {
+  if (addr == CCTALK_ADDR_MASTER) return true;
+  if (addr == 2) return true;                            // coin acceptor NRI Falcon
+  if (ccms::isValidHopperAddress(addr)) return true;     // 3-10
+  if (ccms::isValidBillValidatorAddress(addr)) return true; // 40-50
+  return false;
+}
+
 static bool shouldUseRawOnlyOutput(const CcTalkTransaction& t) {
   const uint8_t addr = transactionAddress(t);
   const uint8_t hdr = t.hasReq ? t.req.hdr : 0;
@@ -1740,6 +1761,36 @@ static bool shouldUseRawOnlyOutput(const CcTalkTransaction& t) {
   }
 
   return true;
+}
+
+static bool isIproCrcBillValidatorTx(const CcTalkTransaction& t) {
+  if (!t.hasReq || !ccms::isValidBillValidatorAddress(t.req.dest)) return false;
+  if (!t.req.crc16) return false;
+  if (t.hasResp && !t.resp.crc16) return false;
+  return true;
+}
+
+static void autoAssignIproRuntimeAddress(uint8_t addr) {
+  if (!ccms::isValidBillValidatorAddress(addr)) return;
+  const uint16_t bit = ccms::billValidatorAddressBit(addr);
+  if ((g_runtimeDeviceSettings.billValidatorIproMask & bit) != 0) return;
+
+  // L'iPRO/JCM usa i frame ccTalk CRC-16 osservati nei log. Se la UI non ha
+  // ancora assegnato quel BV al modello IPRO, lo facciamo solo in RAM per
+  // permettere al decoder economico di aggiornarsi.
+  g_runtimeDeviceSettings.billValidatorMd100Mask =
+      (uint16_t)(g_runtimeDeviceSettings.billValidatorMd100Mask & (uint16_t)~bit);
+  g_runtimeDeviceSettings.billValidatorSmartPayoutMask =
+      (uint16_t)(g_runtimeDeviceSettings.billValidatorSmartPayoutMask & (uint16_t)~bit);
+  g_runtimeDeviceSettings.billValidatorIproMask =
+      (uint16_t)(g_runtimeDeviceSettings.billValidatorIproMask | bit);
+  g_runtimeDeviceSettings.billInValidatorMask =
+      (uint16_t)(g_runtimeDeviceSettings.billInValidatorMask | bit);
+  g_runtimeDeviceSettings.billValidatorModel = ccms::BILL_VALIDATOR_MODEL_IPRO;
+
+  g_billValidatorMd100.setAddressMask(g_runtimeDeviceSettings.billValidatorMd100Mask);
+  g_billValidatorSmartPayout.setAddressMask(g_runtimeDeviceSettings.billValidatorSmartPayoutMask);
+  g_billValidatorIpro.setAddressMask(g_runtimeDeviceSettings.billValidatorIproMask);
 }
 
 static bool shouldPrintDatasetSpecificByAddress(uint8_t addr, uint8_t hdr) {
@@ -2107,8 +2158,8 @@ static EconomicTotals collectSessionEconomicRaw() {
   EconomicTotals session;
   bool recyclerLiveAvailable = false;
   uint32_t recyclerLiveCents = 0;
-  const bool coinAcceptorInEnabled = g_appSettings.coinAcceptorInEnabled;
-  ccms::AppSettings normalizedSettings = g_appSettings;
+  const bool coinAcceptorInEnabled = g_runtimeDeviceSettings.coinAcceptorInEnabled;
+  ccms::AppSettings normalizedSettings = g_runtimeDeviceSettings;
   normalizeCounterRoutingSettings(normalizedSettings);
   const uint16_t recyclerMask = configuredBillValidatorMask();
   const uint8_t coinInHopperMask = normalizedSettings.coinInHopperMask;
@@ -2136,6 +2187,12 @@ static EconomicTotals collectSessionEconomicRaw() {
       recyclerLiveCents += (uint32_t)(s->recyclerInventoryTotalEuro * 100UL);
     }
   }
+
+  // Crediti banconote JCM push-mode: il BV JCM ha checksum non standard e
+  // bypassa il routing normale. L'importo viene ricavato dal comando A7 che
+  // il master invia all'hopper subito dopo l'accettazione della banconota.
+  session.cntotBanconoteInCents += g_jcmBillCreditCents;
+  session.cassaCents            += g_jcmBillCreditCents;
 
   for (uint8_t addr = ccms::kHopperAddressMin; addr <= ccms::kHopperAddressMax; addr++) {
     const uint32_t dispensedCents = hopperDispensedCents(addr);
@@ -2942,6 +2999,178 @@ static void printTransactionRawOnly(Stream& out, const CcTalkTransaction& t) {
   else out.println(F("RAW RESP: (assente)"));
 }
 
+// Nomi degli header JCM iPRO-100 / ccTalk BV secondo spec ID-0E3 (pagina 4-5).
+// Il JCM echeggia nella risposta lo stesso header della richiesta (non usa HDR=0).
+static const __FlashStringHelper* jcmHdrName(uint8_t hdr) {
+  switch (hdr) {
+    // Core commands
+    case 0x01: return F("reset");                  // 1
+    case 0x04: return F("req_comms_rev");          // 4
+    case 0xC0: return F("req_build_code");         // 192
+    case 0xC5: return F("calc_rom_checksum");      // 197
+    case 0xF1: return F("req_sw_revision");        // 241
+    case 0xF2: return F("req_serial_number");      // 242
+    case 0xF4: return F("req_product_code");       // 244
+    case 0xF5: return F("req_category_id");        // 245
+    case 0xF6: return F("req_manufacturer_id");    // 246
+    case 0xF9: return F("req_poll_priority");      // 249
+    case 0xFE: return F("simple_poll");            // 254
+    // Bill validator commands
+    case 0x91: return F("req_currency_rev");       // 145
+    case 0x98: return F("req_bill_opmode");        // 152
+    case 0x99: return F("mod_bill_opmode");        // 153
+    case 0x9A: return F("route_bill");             // 154
+    case 0x9B: return F("req_bill_position");      // 155
+    case 0x9C: return F("req_scaling_factor");     // 156
+    case 0x9D: return F("req_bill_id");            // 157
+    case 0x9F: return F("read_bill_events");       // 159
+    case 0xAA: return F("req_base_year");          // 170
+    case 0xB2: return F("req_bank_select");        // 178
+    case 0xB3: return F("mod_bank_select");        // 179
+    case 0xC3: return F("req_last_mod_date");      // 195
+    case 0xC4: return F("req_creation_date");      // 196
+    case 0xD5: return F("req_option_flags");       // 213
+    case 0xD8: return F("req_data_storage");       // 216
+    case 0xE3: return F("req_master_inhibit");     // 227
+    case 0xE4: return F("mod_master_inhibit");     // 228
+    case 0xE6: return F("req_inhibit");            // 230
+    case 0xE7: return F("mod_inhibit");            // 231
+    case 0xF7: return F("req_variable_set");       // 247
+    // Recycler commands (iPRO-100-RC, pagina 5 spec)
+    case 0x14: return F("mod_recycle_setting");    // 20
+    case 0x16: return F("pump_rng");               // 22
+    case 0x17: return F("req_cipher_key");         // 23
+    case 0x18: return F("req_var_setting");        // 24
+    case 0x1A: return F("req_total_count");        // 26
+    case 0x1C: return F("dispense_bills");         // 28
+    case 0x1D: return F("req_recycler_status");    // 29
+    case 0x1E: return F("emergency_stop");         // 30
+    case 0x20: return F("mod_recycle_currency");   // 32
+    case 0x21: return F("req_recycler_sw_rev");    // 33
+    case 0x22: return F("req_recycle_count");      // 34
+    case 0x23: return F("mod_recycle_count");      // 35
+    case 0x24: return F("req_recycle_current");    // 36
+    case 0x34: return F("req_recycle_mode");       // 52
+    case 0x35: return F("mod_recycle_mode");       // 53
+    case 0x3B: return F("read_recycle_events");    // 59
+    default:   return nullptr;
+  }
+}
+
+// Stampa una transazione con risposta in formato JCM iPRO-100:
+//   [ADDR_DEV][LEN][SEQ][HDR_ECHO][DATA...][CHK_JCM][0x01]
+// Se la risposta non corrisponde al formato JCM ricade su printTransactionRawOnly.
+static void printJcmTransaction(Stream& out, const CcTalkTransaction& t) {
+  const bool isJcm = t.hasResp
+                     && t.resp.raw
+                     && t.resp.rawLen >= 6
+                     && t.resp.raw[t.resp.rawLen - 1] == CCTALK_ADDR_MASTER;
+
+  if (!isJcm) {
+    printTransactionRawOnly(out, t);
+    return;
+  }
+
+  const uint8_t* r      = t.resp.raw;
+  const uint8_t  rn     = t.resp.rawLen;
+  const uint8_t  devAddr = r[0];
+  const uint8_t  dataLen = r[1];
+  const uint8_t  seq     = r[2];
+  const uint8_t  echHdr  = r[3];
+
+  out.println();
+
+  if (t.hasReq) {
+    out.print(F("MASTER -> BV["));
+    out.print(devAddr);
+    out.print(F("]: "));
+    const __FlashStringHelper* name = jcmHdrName(echHdr);
+    if (name) { out.print(name); out.print(' '); }
+    out.print(F("(0x"));
+    if (echHdr < 0x10) out.print('0');
+    out.print(echHdr, HEX);
+    out.println(')');
+    CcTalkDevice::printRawIf(out, true, t.req, "RAW REQ");
+  }
+  // Nessuna richiesta: il JCM e' in modalita auto-push (init: cmd 0xE4 data=0x01).
+  // Il BV invia frame spontanei senza essere interrogato dal master.
+
+  out.print(F("BV["));
+  out.print(devAddr);
+  out.print(F("] PUSH -> MASTER: seq=0x"));
+  if (seq < 0x10) out.print('0');
+  out.print(seq, HEX);
+  out.print(' ');
+  const __FlashStringHelper* hdrname = jcmHdrName(echHdr);
+  if (hdrname) { out.print(hdrname); out.print(' '); }
+  out.print(F("(0x"));
+  if (echHdr < 0x10) out.print('0');
+  out.print(echHdr, HEX);
+  out.print(')');
+  if (dataLen == 0) {
+    out.println(echHdr == 0x9F ? F(" [no_bill_events]") : F(" [no_data]"));
+  } else if (echHdr == 0x9F) {
+    // ID-0E3 bank note event codes: 1=EUR5, 2=EUR10, 3=EUR20, 4=EUR50,
+    // 5=EUR100, 6=EUR200, 7=EUR500 (spec pagina 3)
+    static const uint16_t kBillEur[] = {0, 5, 10, 20, 50, 100, 200, 500};
+    bool anyEvent = false;
+    for (uint8_t i = 0; i < dataLen && (4 + i) < (rn - 2u); i++) {
+      const uint8_t ev = r[4 + i];
+      if (ev >= 1 && ev <= 7) {
+        out.print(anyEvent ? F(" + EUR") : F(" BILL_ACCEPTED: EUR"));
+        out.print(kBillEur[ev]);
+        anyEvent = true;
+      }
+    }
+    if (!anyEvent) out.print(F(" [no_bill_events]"));
+    out.println();
+  } else {
+    out.print(F(" data=["));
+    for (uint8_t i = 0; i < dataLen && (4 + i) < (rn - 2u); i++) {
+      if (i) out.print(' ');
+      out.print(F("0x"));
+      if (r[4 + i] < 0x10) out.print('0');
+      out.print(r[4 + i], HEX);
+    }
+    out.println(']');
+  }
+  CcTalkDevice::printRawIf(out, true, t.resp, "RAW RESP");
+}
+
+// Riconosce e decodifica il frame "Read buffered bill events" in formato JCM ID-0E3.
+// In questa modalita il master usa addr=0x00 (non 0x01 come in ccTalk standard),
+// quindi la risposta del BV ha: dest=0x00, src=0x00, HDR=0x00, dati=bill event codes.
+// Formato: [0x00][LEN][0x00][0x00][ev0..evN][CHK_JCM] + 1 byte probe CRC16
+// Bill event codes (spec pagina 3): 1=EUR5, 2=EUR10, 3=EUR20, 4=EUR50,
+//   5=EUR100, 6=EUR200, 7=EUR500.
+static bool tryPrintJcmBillEventFrame(Stream& out, const CcTalkTransaction& t) {
+  if (!t.hasResp || !t.resp.raw || t.resp.rawLen < 6) return false;
+  const uint8_t* r  = t.resp.raw;
+  const uint8_t  rn = t.resp.rawLen;
+  // Pattern: dest=0x00 (JCM master addr), src=0x00, HDR=0x00 (ACK format)
+  if (r[0] != 0x00 || r[2] != 0x00 || r[3] != 0x00) return false;
+  // LEN deve essere > 0 e coerente con la dimensione del frame ricevuto
+  const uint8_t dataLen = r[1];
+  if (dataLen == 0 || (4u + dataLen + 2u) > rn) return false;  // +2: CHK + probe
+
+  static const uint16_t kBillEur[] = {0, 5, 10, 20, 50, 100, 200, 500};
+  out.println();
+  out.print(F("BV BILL_EVENTS (JCM):"));
+  bool anyEvent = false;
+  for (uint8_t i = 0; i < dataLen; i++) {
+    const uint8_t ev = r[4 + i];
+    if (ev >= 1 && ev <= 7) {
+      out.print(F(" EUR"));
+      out.print(kBillEur[ev]);
+      anyEvent = true;
+    }
+  }
+  if (!anyEvent) out.print(F(" [no events]"));
+  out.println();
+  CcTalkDevice::printRawIf(out, true, t.resp, "RAW RESP");
+  return true;
+}
+
 static void handleConsoleCommands() {
   // Parser volutamente semplice "carattere per carattere":
   // sufficiente per il monitor seriale e robusto su microcontrollore.
@@ -2956,6 +3185,9 @@ static void handleConsoleCommands() {
         break;
       case '3':
         setViewMode(VIEW_INFO_AND_COUNTER_INC);
+        break;
+      case '4':
+        setViewMode(VIEW_ANOMALIES);
         break;
       case 's':
       case 'S':
@@ -2995,6 +3227,34 @@ static void handleConsoleCommands() {
 }
 
 // ============================================================================
+// Contabilita banconote JCM push-mode
+// ============================================================================
+// Il BV JCM iPRO-100 opera in auto-push: i frame hanno checksum non standard
+// (CRC16-JCM) e vengono emessi con checksumOk=false, bypassando g_router.
+// Il segnale di accettazione e route_bill (0x9A) push con data[0]=0x01 (stacker).
+// La denominazione viene ricavata dal comando A7 che il master invia all'hopper
+// subito dopo: payoutRequestValue (centesimi) = importo della banconota.
+
+static uint8_t  g_jcmBillPendingBvAddr = 0;   // 0 = nessuna banconota pending
+static uint32_t g_jcmBillPendingMs     = 0;
+
+// Deve essere chiamata DOPO g_router.route() in modo che payoutRequestValue
+// sia gia aggiornato dall'hopper decoder.
+static void tryInjectJcmBillCredit(const CcTalkTransaction& t) {
+  if (g_jcmBillPendingBvAddr == 0) return;
+  if (!t.checksumOk || !t.hasReq || t.req.hdr != 0xA7) return;
+  if ((millis() - g_jcmBillPendingMs) > 10000u) {
+    g_jcmBillPendingBvAddr = 0;
+    return;
+  }
+  const CcTalkHopper::HopperState* hs = hopperStateForAddress(t.req.dest);
+  if (!hs || !hs->payoutRequestValid || hs->payoutRequestValue == 0) return;
+  // payoutRequestValue e' gia in centesimi (es. 1000 = EUR10)
+  g_jcmBillCreditCents += hs->payoutRequestValue;
+  g_jcmBillPendingBvAddr = 0;
+}
+
+// ============================================================================
 // Callback di sniffing
 // ============================================================================
 // Queste funzioni vengono invocate dal bus sniffer quando ricostruisce un
@@ -3004,6 +3264,23 @@ static void onTx(const CcTalkTransaction& t, uint16_t txCrc, void* user) {
   (void)txCrc; (void)user;
   markCcTalkActivity();
   updateCcTalkBusStatus(t);
+
+  if (isIproCrcBillValidatorTx(t)) {
+    autoAssignIproRuntimeAddress(t.req.dest);
+  }
+
+  // Rilevamento accettazione banconota JCM: route_bill (0x9A) push con
+  // data[0]=0x01 (stacker) indica banconota accettata in auto-push mode.
+  // La denominazione verra' ricavata dal successivo comando A7 all'hopper.
+  if (!t.checksumOk && t.hasResp && t.resp.raw && t.resp.rawLen >= 7
+      && t.resp.raw[t.resp.rawLen - 1] == CCTALK_ADDR_MASTER
+      && t.resp.raw[3] == 0x9A
+      && t.resp.raw[0] >= 40 && t.resp.raw[0] <= 50
+      && t.resp.raw[1] >= 1 && t.resp.raw[4] == 0x01) {
+    g_jcmBillPendingBvAddr = t.resp.raw[0];
+    g_jcmBillPendingMs     = millis();
+  }
+
   const bool rawOnly = shouldUseRawOnlyOutput(t);
   switch (g_viewMode) {
     case VIEW_ECONOMIC_COUNTERS:
@@ -3019,15 +3296,23 @@ static void onTx(const CcTalkTransaction& t, uint16_t txCrc, void* user) {
       } else if (!rawOnly) {
         g_router.route(t, g_nullOut, false);
       }
+      tryInjectJcmBillCredit(t);
       updateEconomicTotalsAndPrintIfChanged(false, isRecyclerInventoryUpdateTx(t), true);
       return;
     case VIEW_ALL_RAW:
-      if (rawOnly) {
-        printTransactionRawOnly(g_runtimeOut, t);
+      if (!t.checksumOk || rawOnly) {
+        if (!t.checksumOk) {
+          g_runtimeOut.print(F("[?] "));
+          if (!tryPrintJcmBillEventFrame(g_runtimeOut, t))
+            printJcmTransaction(g_runtimeOut, t);
+        } else {
+          printTransactionRawOnly(g_runtimeOut, t);
+        }
       } else {
         g_router.route(t, g_runtimeOut, true);
         g_runtimeOut.flushPendingLine();
       }
+      tryInjectJcmBillCredit(t);
       updateEconomicTotalsAndPrintIfChanged(false, isRecyclerInventoryUpdateTx(t), true);
       return;
     case VIEW_INFO_AND_COUNTER_INC:
@@ -3043,10 +3328,30 @@ static void onTx(const CcTalkTransaction& t, uint16_t txCrc, void* user) {
         // Mantiene aggiornata la cache di stato senza generare rumore in output.
         g_router.route(t, g_nullOut, false);
       }
+      tryInjectJcmBillCredit(t);
       // In mode 3 i totali devono restare freschi per la dashboard web,
       // anche se non stiamo stampando nulla su seriale.
       updateEconomicTotalsAndPrintIfChanged(false, false, false);
       return;
+    case VIEW_ANOMALIES: {
+      // Mostra SOLO frame anomali: checksum errato oppure indirizzo non noto.
+      // Tutto il traffico ordinario dei dispositivi configurati viene soppresso.
+      const bool badChecksum  = !t.checksumOk;
+      const bool unknownAddr  = !isCctalkKnownDeviceAddress(transactionAddress(t));
+      if (badChecksum || unknownAddr) {
+        if (badChecksum) {
+          g_runtimeOut.print(F("[?] "));
+          if (!tryPrintJcmBillEventFrame(g_runtimeOut, t))
+            printJcmTransaction(g_runtimeOut, t);
+        } else {
+          printTransactionRawOnly(g_runtimeOut, t);
+        }
+      } else if (!rawOnly) {
+        g_router.route(t, g_nullOut, false);
+      }
+      tryInjectJcmBillCredit(t);
+      return;
+    }
   }
 }
 
@@ -3465,4 +3770,3 @@ void loop() {
   serviceAuxIfDue();
 #endif
 }
-

@@ -77,6 +77,8 @@ public:
     uint16_t recyclerCount20 = 0;
     uint16_t recyclerCount50 = 0;
     uint32_t recyclerInventoryTotalEuro = 0;
+    bool iproRecycleBoxMapValid = false;
+    uint8_t iproRecycleBoxEuro[2] = {0};
 
     bool lastFaultValid = false;
     uint8_t lastFaultCode = 0;
@@ -100,6 +102,10 @@ public:
   void setAddressMask(uint16_t mask);
   bool preloadRecyclerInventory(uint8_t addr, uint16_t c10, uint16_t c20, uint16_t c50);
   uint16_t addressMask() const { return _addressMask; }
+  // Inietta direttamente un credito banconota (EUR) nel totalizzatore del BV.
+  // Usato per banconote JCM push-mode: il checksum non standard bypassa il
+  // routing normale, quindi la contabilita va aggiornata esternamente.
+  void injectAcceptedEuro(uint8_t addr, uint32_t euros);
 
 private:
   static const uint8_t kAddrMin = 40;
@@ -137,9 +143,13 @@ private:
   bool usesSmartPayoutValueCommands() const;
   bool usesMd100RecyclerInventory() const;
   bool usesSmartPayoutRecyclerInventory() const;
+  bool usesIproRecyclerInventory() const;
   void accumulateMd100Dispense(BillValidatorState& state, const CcTalkFrame& req) const;
   void accumulateSmartPayoutDispense(BillValidatorState& state, const CcTalkFrame& req) const;
   bool applyRecyclerDelta(BillValidatorState& state, uint8_t euro, int8_t delta) const;
+  bool applyIproRecycleCurrencySetting(BillValidatorState& state, const uint8_t* data, uint8_t len) const;
+  bool applyIproRecyclerCurrent(BillValidatorState& state, const uint8_t* data, uint8_t len) const;
+  bool iproBillTypeToRecyclerEuro(const BillValidatorState& state, uint8_t billType, uint8_t& euro) const;
   void accumulateSmartPayoutStatus(BillValidatorState& state, const uint8_t* data, uint8_t len) const;
   bool applyMd100RecyclerInventory(BillValidatorState& state, const uint8_t* data, uint8_t len) const;
   bool applySmartPayoutRecyclerInventory(BillValidatorState& state,
