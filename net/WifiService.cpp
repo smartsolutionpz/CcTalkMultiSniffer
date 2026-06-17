@@ -491,11 +491,22 @@ void WifiService::enforcePerformanceMode(bool logResult) {
 #if defined(ARDUINO_ARCH_ESP32)
   psOk = (esp_wifi_set_ps(WIFI_PS_NONE) == ESP_OK);
   if (appconfig::WIFI_FORCE_LEGACY_24G) {
+    // ESP32C6 e' un dispositivo WiFi 6 (802.11ax): includere 11AX nel mask
+    // evita che la restrizione di protocollo impedisca la connessione su AP moderni.
+#if defined(CONFIG_IDF_TARGET_ESP32C6)
+    const uint8_t protocol = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_11AX;
+#else
     const uint8_t protocol = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N;
+#endif
+    const wifi_mode_t currentMode = WiFi.getMode();
     legacyOk = (esp_wifi_set_protocol(WIFI_IF_STA, protocol) == ESP_OK);
     legacyOk = legacyOk && (esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20) == ESP_OK);
-    legacyOk = legacyOk && (esp_wifi_set_protocol(WIFI_IF_AP, protocol) == ESP_OK);
-    legacyOk = legacyOk && (esp_wifi_set_bandwidth(WIFI_IF_AP, WIFI_BW_HT20) == ESP_OK);
+    // Impostare WIFI_IF_AP in modalita' STA-only causa ESP_ERR_WIFI_IF su ESP32C6
+    // e puo' corrompere lo stato dello stack WiFi.
+    if (currentMode == WIFI_AP || currentMode == WIFI_AP_STA) {
+      legacyOk = legacyOk && (esp_wifi_set_protocol(WIFI_IF_AP, protocol) == ESP_OK);
+      legacyOk = legacyOk && (esp_wifi_set_bandwidth(WIFI_IF_AP, WIFI_BW_HT20) == ESP_OK);
+    }
   }
 #endif
 

@@ -38,7 +38,7 @@ static const uint32_t NTP_RESYNC_INTERVAL_MS = 21600000UL;
 // Seeed XIAO ESP32C6:
 // D7/GPIO17 = RX sniff ccTalk, D4/GPIO22 = SDA, D5/GPIO23 = SCL.
 // RF switch FM8625H: GPIO3=LOW abilita switch, GPIO14=HIGH seleziona antenna esterna.
-static const bool WIFI_USE_EXTERNAL_ANTENNA = true; // true = antenna esterna IPEX
+static const bool WIFI_USE_EXTERNAL_ANTENNA = false; // true = antenna esterna IPEX
 static const int CCTALK_UART_RX_PIN = 17;  // RX sniff ccTalk
 static const int CCTALK_UART_TX_PIN = -1;  // RX-only
 static const int FRAM_I2C_SDA_PIN = 22;
