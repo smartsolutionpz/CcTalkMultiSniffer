@@ -163,6 +163,11 @@ void WebServerService::setEnterProgModeAction(EnterProgModeCallback cb, void* us
   _enterProgModeUserData = userData;
 }
 
+void WebServerService::setWifiTestAction(WifiTestCallback cb, void* userData) {
+  _onWifiTest = cb;
+  _wifiTestUserData = userData;
+}
+
 void WebServerService::setSettingsActions(GetSettingsCallback onGetSettings,
                                           GetPresentPeripheralCatalogCallback onGetPresentPeripheralCatalog,
                                           SaveSettingsCallback onSaveSettings,
@@ -182,6 +187,7 @@ void WebServerService::begin() {
   _server.on("/", HTTP_GET, [this]() { handleRoot(); });
   _server.on("/status", HTTP_GET, [this]() { handleStatusPage(); });
   _server.on("/settings", HTTP_GET, [this]() { handleSettingsPage(); });
+  _server.on("/app.css", HTTP_GET, [this]() { handleAppCss(); });
   _server.on("/health", HTTP_GET, [this]() { handleHealth(); });
   _server.on("/api/status", HTTP_GET, [this]() { handleApiStatus(); });
   _server.on("/api/logs", HTTP_GET, [this]() { handleApiLogs(); });
@@ -189,6 +195,7 @@ void WebServerService::begin() {
   _server.on("/api/settings", HTTP_GET, [this]() { handleApiGetSettings(); });
   _server.on("/api/settings", HTTP_POST, [this]() { handleApiSaveSettings(); });
   _server.on("/api/settings/testconnection", HTTP_POST, [this]() { handleApiTestConnection(); });
+  _server.on("/api/wifi/test", HTTP_POST, [this]() { handleApiWifiTest(); });
   _server.on("/api/counters/reset", HTTP_POST, [this]() { handleApiResetCounters(); });
   _server.on("/api/coins/base", HTTP_POST, [this]() { handleApiSetCoinBase(); });
   _server.on("/api/bills/recycler/base", HTTP_POST, [this]() { handleApiSetBillRecyclerBase(); });
@@ -205,6 +212,99 @@ void WebServerService::loop() {
   _server.handleClient();
 }
 
+void WebServerService::handleAppCss() {
+  // Foglio di stile condiviso da tutte le pagine: evita di triplicare il CSS
+  // nei tre blocchi PROGMEM e riduce il peso totale servito dal firmware.
+  static const char CSS[] PROGMEM = R"CSS(
+:root{
+  --bg:#f1f4f9; --panel:#fff; --text:#1b2330; --muted:#5b6b82; --border:#e1e7f0;
+  --primary:#2563eb; --primary-dark:#1d4ed8; --warn:#d97706; --ok:#16a34a; --bad:#dc2626;
+  --radius:14px; --shadow:0 1px 2px rgba(15,23,42,.06),0 1px 8px rgba(15,23,42,.05);
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  background:var(--bg); color:var(--text); line-height:1.45; padding-bottom:28px; font-size:15px;
+}
+.appbar{
+  position:sticky; top:0; z-index:10; display:flex; align-items:center; justify-content:space-between;
+  gap:8px; background:var(--panel); border-bottom:1px solid var(--border); padding:10px 14px; flex-wrap:wrap;
+}
+.appbar h1{font-size:17px; margin:0; font-weight:600;}
+.appbar .actions{display:flex; gap:8px; flex-wrap:wrap;}
+.pill{
+  display:inline-flex; align-items:center; gap:6px; border-radius:999px; padding:6px 12px; font-size:12px;
+  font-weight:500; background:#eef2ff; color:#3346a3; border:1px solid #d7defc; white-space:nowrap;
+}
+.pill.ok{background:#e7f8ee; color:#146c3a; border-color:#bfe8cf;}
+.pill.bad{background:#fdecec; color:#a3271f; border-color:#f7c9c6;}
+main{max-width:880px; margin:0 auto; padding:12px; display:flex; flex-direction:column; gap:12px;}
+.card{background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:14px; box-shadow:var(--shadow);}
+.card h2{margin:0 0 10px 0; font-size:14px; font-weight:600;}
+.kv{margin:0; font-size:13px; white-space:pre-wrap; word-break:break-word; font-family:ui-monospace,Consolas,Menlo,monospace;}
+.grid-cards{display:grid; grid-template-columns:1fr; gap:12px;}
+@media (min-width:720px){.grid-cards{grid-template-columns:repeat(2,1fr);}}
+@media (min-width:1080px){.grid-cards{grid-template-columns:repeat(3,1fr);}}
+.btn{
+  appearance:none; border:0; border-radius:10px; padding:11px 16px; font-size:14px; font-weight:600;
+  background:var(--primary); color:#fff; cursor:pointer; text-align:center; text-decoration:none;
+  display:inline-flex; align-items:center; justify-content:center; gap:6px;
+}
+.btn:active{background:var(--primary-dark);}
+.btn.secondary{background:#eef1f6; color:var(--text);}
+.btn.warn{background:var(--warn);}
+.btn-row{display:flex; gap:8px; flex-wrap:wrap;}
+@media (max-width:480px){.btn-row .btn{flex:1 1 auto;}}
+label{font-size:13px; font-weight:500; display:block; margin-bottom:4px;}
+input,select{
+  width:100%; font-size:15px; padding:10px; border:1px solid var(--border); border-radius:10px;
+  background:#fff; color:var(--text); font-family:inherit;
+}
+input:focus,select:focus{outline:2px solid var(--primary); outline-offset:1px;}
+.field{margin-bottom:10px;}
+.field-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px;}
+.status-text{font-size:12.5px; color:var(--muted); margin-top:8px; min-height:1.2em; white-space:pre-wrap;}
+.checkbox-row{display:flex; align-items:center; gap:8px; font-size:13px; font-weight:400;}
+.checkbox-row input{width:auto;}
+details.collapsible{border:1px solid var(--border); border-radius:10px; background:#f8fafc; overflow:hidden;}
+details.collapsible summary{
+  cursor:pointer; padding:11px 12px; font-size:13px; font-weight:600; list-style:none;
+  display:flex; align-items:center; gap:6px;
+}
+details.collapsible summary::-webkit-details-marker{display:none;}
+details.collapsible summary::before{content:'▸'; transition:transform .15s; color:var(--muted);}
+details.collapsible[open] summary::before{transform:rotate(90deg);}
+details.collapsible .body{padding:0 12px 12px 12px;}
+details.info{margin-top:6px;}
+details.info summary{
+  cursor:pointer; font-size:12px; color:var(--primary); list-style:none;
+  display:inline-flex; align-items:center; gap:4px; font-weight:600;
+}
+details.info summary::-webkit-details-marker{display:none;}
+details.info summary::before{content:'ⓘ';}
+details.info .body{font-size:12px; color:var(--muted); margin-top:6px; padding:9px 10px; background:#f8fafc; border-radius:8px; border:1px solid var(--border);}
+.section{border-top:1px solid var(--border); padding-top:14px; margin-top:14px;}
+.section:first-of-type{border-top:0; padding-top:0; margin-top:0;}
+.section-title{margin:0 0 10px 0; font-size:15px; font-weight:600;}
+.device-item{display:flex; flex-direction:column; gap:8px; border:1px solid var(--border); border-radius:10px; padding:10px; background:#f8fafc; font-size:13px;}
+.device-item.info{background:#fff8e8; border-color:#f3d692;}
+.device-title{font-weight:600;}
+.device-note{font-size:12px; color:var(--muted);}
+.device-list{margin:0; padding-left:18px; font-size:13px;}
+.mask-group{display:flex; flex-direction:column; gap:8px;}
+.mask-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:8px;}
+.mask-grid label{display:flex; align-items:center; gap:8px; border:1px solid var(--border); border-radius:10px; padding:9px; background:#f8fafc; font-size:13px; font-weight:400; margin:0;}
+.mask-grid label input{width:auto;}
+.secret-field{display:flex; gap:8px; align-items:center;}
+.secret-field input{flex:1 1 auto; min-width:0;}
+.hidden{display:none !important;}
+a{color:var(--primary);}
+)CSS";
+  _server.sendHeader("Cache-Control", "public, max-age=600");
+  _server.send(200, "text/css", CSS);
+}
+
 void WebServerService::handleRoot() {
   // Root page dinamica in base alla modalita UI attiva.
   if (_uiMode != UI_MODE_PROG) {
@@ -219,55 +319,55 @@ void WebServerService::handleRoot() {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>CcTalkMultiSniffer PROG</title>
-  <style>
-    body { font-family: Consolas, Menlo, monospace; margin: 18px; background: #f5f7fb; color: #1f2933; }
-    h1 { margin-top: 0; margin-bottom: 14px; }
-    .card { background: #fff; border: 1px solid #d9e2ec; border-radius: 10px; padding: 14px; max-width: 540px; }
-    .actions { display: flex; gap: 10px; flex-wrap: wrap; }
-    a.button, button.button { display: inline-block; text-decoration: none; background: #1f6feb; color: #fff; padding: 10px 14px; border-radius: 8px; border: 0; cursor: pointer; }
-    .note { margin-top: 14px; font-size: 13px; color: #486581; }
-    .status { margin-top: 12px; font-size: 12px; color: #334e68; white-space: pre-wrap; }
-    .wifi-indicator { display: inline-block; margin-bottom: 12px; background: #e9f2ff; border: 1px solid #bcd2f7; border-radius: 999px; padding: 8px 12px; font-size: 12px; }
-    .section { margin-top: 14px; padding-top: 14px; border-top: 1px solid #d9e2ec; }
-    .field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
-    .field-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #334e68; }
-    .field-grid input { width: 100%; font-family: Consolas, Menlo, monospace; font-size: 13px; padding: 8px; }
-  </style>
+  <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-  <div class="card">
-    <div id="wifiIndicator" class="wifi-indicator">WiFi: loading...</div>
+  <div class="appbar">
     <h1>Modalita PROG</h1>
-    <div class="actions">
-      <a class="button" href="/settings">Impostazioni</a>
-      <a class="button" href="/status">Stato</a>
-      <button id="btnTestConnection" class="button" type="button">Test connessione DB</button>
-    </div>
-    <div id="progStatus" class="status"></div>
-    <div class="section">
-      <div class="note">Valore manuale cassette banconote recycler.</div>
-      <div class="field-grid">
-        <label>
-          Cassetta 10 EUR
-          <input id="billCassette10Input" type="number" step="1" placeholder="0">
-        </label>
-        <label>
-          Cassetta 20 EUR
-          <input id="billCassette20Input" type="number" step="1" placeholder="0">
-        </label>
-        <label>
-          Cassetta 50 EUR
-          <input id="billCassette50Input" type="number" step="1" placeholder="0">
-        </label>
-      </div>
-      <div class="actions" style="margin-top:10px;">
-        <button id="btnSaveBillRecycler" class="button" type="button">Salva cassette banconote</button>
-      </div>
-      <div class="note">Inserisci manualmente il numero di banconote presenti nelle tre cassette recycler.</div>
-    </div>
-    <div class="note">AP locale attivo: 192.168.4.1</div>
-    <div class="note">Il test usa le impostazioni salvate e prova prima il server remoto, poi il socket MySQL se configurato.</div>
+    <div id="wifiIndicator" class="pill">WiFi: loading...</div>
   </div>
+  <main>
+    <div class="card">
+      <h2>Azioni</h2>
+      <div class="btn-row">
+        <a class="btn" href="/settings">Impostazioni</a>
+        <a class="btn secondary" href="/status">Stato</a>
+        <button id="btnTestConnection" class="btn secondary" type="button">Test connessione DB</button>
+      </div>
+      <div id="progStatus" class="status-text"></div>
+    </div>
+    <div class="card">
+      <h2>Cassette banconote recycler</h2>
+      <div class="field-grid">
+        <div class="field">
+          <label for="billCassette10Input">Cassetta 10 EUR</label>
+          <input id="billCassette10Input" type="number" step="1" placeholder="0">
+        </div>
+        <div class="field">
+          <label for="billCassette20Input">Cassetta 20 EUR</label>
+          <input id="billCassette20Input" type="number" step="1" placeholder="0">
+        </div>
+        <div class="field">
+          <label for="billCassette50Input">Cassetta 50 EUR</label>
+          <input id="billCassette50Input" type="number" step="1" placeholder="0">
+        </div>
+      </div>
+      <div class="btn-row" style="margin-top:10px;">
+        <button id="btnSaveBillRecycler" class="btn" type="button">Salva cassette banconote</button>
+      </div>
+      <details class="info">
+        <summary>Info</summary>
+        <div class="body">Inserisci manualmente il numero di banconote presenti nelle tre cassette recycler.</div>
+      </details>
+    </div>
+    <details class="collapsible">
+      <summary>Note</summary>
+      <div class="body status-text">
+        AP locale attivo: 192.168.4.1<br>
+        Il test usa le impostazioni salvate e prova prima il server remoto, poi il socket MySQL se configurato.
+      </div>
+    </details>
+  </main>
   <script>
     function s(v) { return (v === undefined || v === null) ? '' : String(v); }
     let billRecyclerDirty = false;
@@ -375,69 +475,61 @@ void WebServerService::handleStatusPage() {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>CcTalkMultiSniffer Dashboard</title>
-  <style>
-    body { font-family: Consolas, Menlo, monospace; margin: 14px; background: #f5f7fb; color: #1f2933; }
-    .grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
-    .panel { background: #fff; border: 1px solid #d9e2ec; border-radius: 8px; padding: 10px; }
-    .topbar { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 8px; }
-    h1 { margin: 0 0 8px 0; font-size: 18px; }
-    h2 { margin: 0 0 8px 0; font-size: 14px; }
-    pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
-    .controls { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
-    .controls-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; width: 100%; }
-    .controls-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; width: 100%; }
-    .controls-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #334e68; }
-    input, button { font-family: Consolas, Menlo, monospace; font-size: 13px; padding: 6px; }
-    .status { margin-top: 8px; font-size: 12px; color: #334e68; }
-    .wifi-indicator { display: inline-block; margin-bottom: 10px; background: #e9f2ff; border: 1px solid #bcd2f7; border-radius: 999px; padding: 8px 12px; font-size: 12px; }
-    a.button { display: inline-block; text-decoration: none; background: #1f6feb; color: #fff; padding: 8px 12px; border-radius: 8px; }
-  </style>
+  <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-  <div id="wifiIndicator" class="wifi-indicator">WiFi: loading...</div>
-  <div class="topbar">
+  <div class="appbar">
     <h1>CcTalkMultiSniffer</h1>
-    <!--PROG_MENU_BUTTON-->
+    <div class="actions">
+      <div id="wifiIndicator" class="pill">WiFi: loading...</div>
+      <!--PROG_MENU_BUTTON-->
+    </div>
   </div>
-  <div class="grid">
-    <div class="panel"><h2>WiFi</h2><pre id="wifi">loading...</pre></div>
-    <div class="panel"><h2>MQTT</h2><pre id="mqttStatus">loading...</pre></div>
-    <div class="panel"><h2>Data e ora</h2><pre id="clock">loading...</pre></div>
-    <div class="panel"><h2>ccTalk Bus</h2><pre id="bus">loading...</pre></div>
-    <div class="panel">
+  <main>
+    <div class="grid-cards">
+      <div class="card"><h2>WiFi</h2><pre id="wifi" class="kv">loading...</pre></div>
+      <div class="card"><h2>MQTT</h2><pre id="mqttStatus" class="kv">loading...</pre></div>
+      <div class="card"><h2>Data e ora</h2><pre id="clock" class="kv">loading...</pre></div>
+      <div class="card"><h2>ccTalk Bus</h2><pre id="bus" class="kv">loading...</pre></div>
+      <div class="card"><h2>Economics</h2><pre id="econ" class="kv">loading...</pre></div>
+    </div>
+    <div class="card">
       <h2>Azioni</h2>
-      <div class="controls">
-        <div class="controls-row">
-          <button id="btnReset" type="button">Azzera</button>
-          <button id="btnSaveRemote" type="button">Salva su DB server</button>
-        </div>
-        <div class="controls-row">
-          <input id="coinLevelInput" type="number" step="0.01" min="0" placeholder="Livello iniziale monete (EUR)">
-          <button id="btnSetBase" type="button">Imposta livello iniziale + reset</button>
-        </div>
-        <div class="controls-grid">
-          <label>
-            Cassetta 10 EUR
-            <input id="billCassette10Input" type="number" step="1" placeholder="0">
-          </label>
-          <label>
-            Cassetta 20 EUR
-            <input id="billCassette20Input" type="number" step="1" placeholder="0">
-          </label>
-          <label>
-            Cassetta 50 EUR
-            <input id="billCassette50Input" type="number" step="1" placeholder="0">
-          </label>
-        </div>
-        <div class="controls-row">
-          <button id="btnSaveBillRecycler" type="button">Salva cassette banconote</button>
+      <div class="btn-row">
+        <button id="btnReset" class="btn secondary" type="button">Azzera</button>
+        <button id="btnSaveRemote" class="btn secondary" type="button">Salva su DB server</button>
+      </div>
+      <div class="field" style="margin-top:10px;">
+        <label for="coinLevelInput">Livello iniziale monete (EUR)</label>
+        <div class="btn-row">
+          <input id="coinLevelInput" type="number" step="0.01" min="0" placeholder="0.00" style="flex:1 1 160px;">
+          <button id="btnSetBase" class="btn secondary" type="button">Imposta livello iniziale + reset</button>
         </div>
       </div>
-      <div id="actionStatus" class="status"></div>
+      <div class="field-grid" style="margin-top:10px;">
+        <div class="field">
+          <label for="billCassette10Input">Cassetta 10 EUR</label>
+          <input id="billCassette10Input" type="number" step="1" placeholder="0">
+        </div>
+        <div class="field">
+          <label for="billCassette20Input">Cassetta 20 EUR</label>
+          <input id="billCassette20Input" type="number" step="1" placeholder="0">
+        </div>
+        <div class="field">
+          <label for="billCassette50Input">Cassetta 50 EUR</label>
+          <input id="billCassette50Input" type="number" step="1" placeholder="0">
+        </div>
+      </div>
+      <div class="btn-row" style="margin-top:10px;">
+        <button id="btnSaveBillRecycler" class="btn secondary" type="button">Salva cassette banconote</button>
+      </div>
+      <div id="actionStatus" class="status-text"></div>
     </div>
-    <div class="panel"><h2>Economics</h2><pre id="econ">loading...</pre></div>
-    <div class="panel"><h2>Logs</h2><pre id="logs">loading...</pre></div>
-  </div>
+    <details class="collapsible">
+      <summary>Log di sistema</summary>
+      <div class="body"><pre id="logs" class="kv">loading...</pre></div>
+    </details>
+  </main>
   <script>
     function s(v) { return (v === undefined || v === null) ? '' : String(v); }
     let billRecyclerDirty = false;
@@ -633,12 +725,11 @@ void WebServerService::handleStatusPage() {
   String page(PAGE);
   if (_uiMode == UI_MODE_PROG) {
     page.replace("<!--PROG_MENU_BUTTON-->",
-      "<a class=\"button\" href=\"/settings\">Impostazioni</a>"
-      " <a class=\"button\" href=\"/\">Menu</a>");
+      "<a class=\"btn secondary\" href=\"/settings\">Impostazioni</a>"
+      "<a class=\"btn secondary\" href=\"/\">Menu</a>");
   } else {
     page.replace("<!--PROG_MENU_BUTTON-->",
-      "<button style=\"font-family:Consolas,Menlo,monospace;font-size:13px;"
-      "padding:8px 12px;background:#d97706;color:#fff;border:0;border-radius:8px;cursor:pointer;\""
+      "<button class=\"btn warn\""
       " onclick=\"this.disabled=true;this.textContent='Riavvio...';"
       "fetch('/api/mode/prog',{method:'POST'})"
       ".catch(()=>{this.disabled=false;this.textContent='Modalita PROG';})\""
@@ -662,183 +753,154 @@ void WebServerService::handleSettingsPage() {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>CcTalkMultiSniffer Impostazioni</title>
-  <style>
-    * { box-sizing: border-box; }
-    body { font-family: Consolas, Menlo, monospace; margin: 14px; background: #f5f7fb; color: #1f2933; }
-    .panel { width: min(100%, 780px); max-width: 780px; background: #fff; border: 1px solid #d9e2ec; border-radius: 8px; padding: 12px; }
-    .section { border-top: 1px solid #d9e2ec; padding-top: 14px; margin-top: 14px; }
-    .section:first-of-type { border-top: 0; padding-top: 0; margin-top: 0; }
-    .section-title { margin: 0 0 10px 0; font-size: 15px; }
-    .section-note { margin: -4px 0 12px 0; font-size: 12px; color: #486581; }
-    .row { display: grid; grid-template-columns: 210px 1fr; gap: 8px; margin-bottom: 8px; align-items: center; }
-    .row-top { align-items: start; }
-    label { font-size: 13px; }
-    input, select, button, a { font-family: Consolas, Menlo, monospace; font-size: 13px; padding: 7px; }
-    input[type="text"], input[type="password"], select { width: 100%; min-width: 0; max-width: 100%; }
-    .actions { display: flex; gap: 8px; margin-top: 12px; }
-    .status { margin-top: 12px; font-size: 12px; color: #334e68; }
-    .wifi-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    .server-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    .secret-field { display: flex; gap: 8px; align-items: center; }
-    .secret-field input { flex: 1 1 auto; min-width: 0; }
-    .secret-toggle { white-space: nowrap; }
-    .hint { font-size: 12px; color: #486581; }
-    .checkbox { display: flex; align-items: center; gap: 8px; }
-    .mask-group { display: flex; flex-direction: column; gap: 8px; }
-    .mask-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
-    .mask-grid label { display: flex; align-items: center; gap: 8px; border: 1px solid #d9e2ec; border-radius: 8px; padding: 8px; background: #f8fbff; }
-    .device-item { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 220px); gap: 8px; border: 1px solid #d9e2ec; border-radius: 8px; padding: 8px; background: #f8fbff; font-size: 13px; align-items: center; }
-    .device-item.info { background: #fff7e6; border-color: #f7d08a; }
-    .device-meta { display: flex; flex-direction: column; gap: 4px; }
-    .device-title { font-weight: 600; }
-    .device-note { font-size: 12px; color: #486581; }
-    .device-list { margin: 0; padding-left: 18px; }
-    .hidden { display: none; }
-    .wifi-indicator { display: inline-block; margin-bottom: 12px; background: #e9f2ff; border: 1px solid #bcd2f7; border-radius: 999px; padding: 8px 12px; font-size: 12px; }
-    .row > :nth-child(2),
-    .device-item > :nth-child(2) { min-width: 0; }
-    @media (max-width: 680px) {
-      body { margin: 8px; }
-      .panel { padding: 10px; }
-      .row { grid-template-columns: 1fr; gap: 6px; }
-      .device-item { grid-template-columns: 1fr; }
-      .secret-field { flex-wrap: wrap; }
-      .secret-field > * { width: 100%; }
-      .secret-toggle { white-space: normal; }
-      .wifi-tools, .server-tools, .actions { flex-direction: column; align-items: stretch; }
-      .wifi-tools > *, .server-tools > *, .actions > * { width: 100%; }
-      .checkbox { align-items: flex-start; }
-      .mask-grid { grid-template-columns: 1fr; }
-      .wifi-indicator { display: block; width: 100%; border-radius: 12px; }
-    }
-  </style>
+  <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-  <div id="wifiIndicator" class="wifi-indicator">WiFi: loading...</div>
-  <div class="panel">
-    <h2>Impostazioni</h2>
-    <div class="section">
+  <div class="appbar">
+    <h1>Impostazioni</h1>
+    <div id="wifiIndicator" class="pill">WiFi: loading...</div>
+  </div>
+  <main>
+    <div class="card section">
       <h3 class="section-title">Connessione rete</h3>
-      <div class="row row-top">
+      <div class="field">
         <label for="wifiSsidSelect">Rete WiFi</label>
-        <div>
-          <div class="wifi-tools">
-            <select id="wifiSsidSelect"></select>
-            <button id="btnScanWifi" type="button">Aggiorna reti</button>
-          </div>
-          <input id="wifiSsidManual" class="hidden" type="text" placeholder="SSID rete nascosta">
-          <div id="wifiScanStatus" class="hint"></div>
+        <div class="btn-row">
+          <select id="wifiSsidSelect" style="flex:1 1 200px;"></select>
+          <button id="btnScanWifi" class="btn secondary" type="button">Aggiorna reti</button>
         </div>
+        <input id="wifiSsidManual" class="hidden" type="text" placeholder="SSID rete nascosta" style="margin-top:8px;">
+        <div id="wifiScanStatus" class="status-text"></div>
       </div>
-      <div class="row">
+      <div class="field">
         <label for="wifiPass">WiFi Password</label>
         <div class="secret-field">
           <input id="wifiPass" type="password">
-          <button id="toggleWifiPass" class="secret-toggle" type="button">Mostra</button>
+          <button id="toggleWifiPass" class="btn secondary" type="button">Mostra</button>
         </div>
       </div>
-      <div class="row">
-        <label for="saveWifiCredentials">Salva credenziali WiFi</label>
-        <label class="checkbox"><input id="saveWifiCredentials" type="checkbox">Memorizza SSID e password per la connessione automatica</label>
+      <div class="field">
+        <label>Test connessione WiFi</label>
+        <button id="btnTestWifi" class="btn secondary" type="button">Testa connessione WiFi</button>
+        <div id="wifiTestStatus" class="status-text"></div>
+      </div>
+      <div class="field">
+        <label class="checkbox-row"><input id="saveWifiCredentials" type="checkbox">Salva credenziali WiFi per la connessione automatica</label>
       </div>
     </div>
 
-    <div class="section">
+    <div class="card section">
       <h3 class="section-title">Configurazione server</h3>
-      <div class="section-note">Questa sezione e opzionale. Compilala solo se vuoi usare servizi remoti o database.</div>
-      <div class="row"><label for="serverUrl">Server Web URL</label><input id="serverUrl" type="text" placeholder="https://example.com/api"></div>
-      <div class="row"><label for="locationCode">Codice ubicazione</label><input id="locationCode" type="text" maxlength="14" placeholder="richiesto solo se usi il registro remoto"></div>
-      <div class="row">
+      <details class="info">
+        <summary>Info</summary>
+        <div class="body">Questa sezione e opzionale. Compilala solo se vuoi usare servizi remoti o database.</div>
+      </details>
+      <div class="field"><label for="serverUrl">Server Web URL</label><input id="serverUrl" type="text" placeholder="https://example.com/api"></div>
+      <div class="field"><label for="locationCode">Codice ubicazione</label><input id="locationCode" type="text" maxlength="14" placeholder="richiesto solo se usi il registro remoto"></div>
+      <div class="field">
         <label for="apiKey">API Key</label>
         <div class="secret-field">
           <input id="apiKey" type="password" placeholder="opzionale ma consigliata">
-          <button id="toggleApiKey" class="secret-toggle" type="button">Mostra</button>
+          <button id="toggleApiKey" class="btn secondary" type="button">Mostra</button>
         </div>
       </div>
-      <h3 class="section-title">MQTT (EMQX)</h3>
-      <div class="section-note">Abilita MQTT per ricevere comandi in push dal broker EMQX invece del polling HTTP.</div>
-      <div class="row"><label><input id="mqttEnabled" type="checkbox"> Abilita MQTT</label></div>
-      <div class="row"><label for="mqttBrokerHost">Broker host</label><input id="mqttBrokerHost" type="text" placeholder="xxxx.ala.eu-central-1.emqxsl.com"></div>
-      <div class="row"><label for="mqttBrokerPort">Porta</label><input id="mqttBrokerPort" type="number" min="1" max="65535" value="1883"></div>
-      <div class="row"><label for="mqttUsername">Username</label><input id="mqttUsername" type="text" placeholder="username EMQX"></div>
-      <div class="row">
+
+      <h3 class="section-title" style="margin-top:16px;">MQTT (EMQX)</h3>
+      <details class="info">
+        <summary>Info</summary>
+        <div class="body">Abilita MQTT per ricevere comandi in push dal broker EMQX invece del polling HTTP.</div>
+      </details>
+      <div class="field"><label class="checkbox-row"><input id="mqttEnabled" type="checkbox"> Abilita MQTT</label></div>
+      <div class="field"><label for="mqttBrokerHost">Broker host</label><input id="mqttBrokerHost" type="text" placeholder="xxxx.ala.eu-central-1.emqxsl.com"></div>
+      <div class="field"><label for="mqttBrokerPort">Porta</label><input id="mqttBrokerPort" type="number" min="1" max="65535" value="1883"></div>
+      <div class="field"><label for="mqttUsername">Username</label><input id="mqttUsername" type="text" placeholder="username EMQX"></div>
+      <div class="field">
         <label for="mqttPassword">Password</label>
         <div class="secret-field">
           <input id="mqttPassword" type="password" placeholder="password EMQX">
-          <button id="toggleMqttPassword" class="secret-toggle" type="button">Mostra</button>
+          <button id="toggleMqttPassword" class="btn secondary" type="button">Mostra</button>
         </div>
       </div>
-      <div class="row row-top">
+      <div class="field">
         <label>Test connessione</label>
-        <div>
-          <div class="server-tools">
-            <button id="btnTestConnection" type="button">Test endpoint remoto</button>
-          </div>
-          <div class="hint">Usa i valori correnti del form; se necessario tenta prima la connessione WiFi e poi il controllo dell'endpoint remoto.</div>
-        </div>
+        <button id="btnTestConnection" class="btn secondary" type="button">Test endpoint remoto</button>
+        <details class="info">
+          <summary>Info</summary>
+          <div class="body">Usa i valori correnti del form; se necessario tenta prima la connessione WiFi e poi il controllo dell'endpoint remoto.</div>
+        </details>
       </div>
     </div>
 
-    <div class="section">
+    <div class="card section">
       <h3 class="section-title">Impostazioni periferiche</h3>
-      <div class="row row-top">
+      <div class="field">
         <label>Dispositivi rilevati</label>
-        <div class="mask-group">
-          <div id="detectedDevicesList" class="mask-group"></div>
-          <div class="hint">Per ogni indirizzo ccTalk rilevato scegli il tipo di periferica tra quelli supportati dal firmware. Le nuove assegnazioni modello richiedono riavvio per essere applicate ai decoder.</div>
-        </div>
+        <div id="detectedDevicesList" class="mask-group"></div>
+        <details class="info">
+          <summary>Info</summary>
+          <div class="body">Per ogni indirizzo ccTalk rilevato scegli il tipo di periferica tra quelli supportati dal firmware. Le nuove assegnazioni modello richiedono riavvio per essere applicate ai decoder.</div>
+        </details>
       </div>
-      <div class="row row-top">
+      <div class="field">
         <label>Contatore monete IN</label>
-        <div class="mask-group">
-          <div id="coinInHopperMaskGroup" class="mask-grid"></div>
-          <div id="coinAcceptorInfo" class="mask-grid"></div>
-          <div class="hint">Elenco periferiche con indirizzo che devono contribuire a `CntotMoneteIn`. Lo stesso hopper non puo essere selezionato anche in OUT.</div>
-        </div>
+        <div id="coinInHopperMaskGroup" class="mask-grid"></div>
+        <div id="coinAcceptorInfo" class="mask-grid"></div>
+        <details class="info">
+          <summary>Info</summary>
+          <div class="body">Elenco periferiche con indirizzo che devono contribuire a `CntotMoneteIn`. Lo stesso hopper non puo essere selezionato anche in OUT.</div>
+        </details>
       </div>
-      <div class="row row-top">
+      <div class="field">
         <label>Contatore monete OUT</label>
-        <div class="mask-group">
-          <div id="coinOutHopperMaskGroup" class="mask-grid"></div>
-          <div class="hint">Elenco periferiche con indirizzo che devono contribuire a `CntotMoneteOut`. Lo stesso hopper non puo essere selezionato anche in IN.</div>
-        </div>
+        <div id="coinOutHopperMaskGroup" class="mask-grid"></div>
+        <details class="info">
+          <summary>Info</summary>
+          <div class="body">Elenco periferiche con indirizzo che devono contribuire a `CntotMoneteOut`. Lo stesso hopper non puo essere selezionato anche in IN.</div>
+        </details>
       </div>
-      <div class="row row-top">
+      <div class="field">
         <label>Valore hopper mono-moneta / unita base discriminatore</label>
-        <div class="mask-group">
-          <div id="hopperCoinValueGroup" class="mask-group"></div>
-          <div class="hint">Per gli hopper mono-moneta imposta il taglio fisso. Per i discriminatori multi-taglio imposta il valore dell'unita base monetaria usata dal device per convertire i conteggi type1/type2 in valore economico.</div>
-        </div>
+        <div id="hopperCoinValueGroup" class="mask-group"></div>
+        <details class="info">
+          <summary>Info</summary>
+          <div class="body">Per gli hopper mono-moneta imposta il taglio fisso. Per i discriminatori multi-taglio imposta il valore dell'unita base monetaria usata dal device per convertire i conteggi type1/type2 in valore economico.</div>
+        </details>
       </div>
-      <div class="row row-top">
+      <div class="field">
         <label>Contatore banconote IN</label>
-        <div class="mask-group">
-          <div id="billInValidatorMaskGroup" class="mask-grid"></div>
-          <div class="hint">Elenco periferiche con indirizzo che devono contribuire a `CntotBanconoteIN`.</div>
-        </div>
+        <div id="billInValidatorMaskGroup" class="mask-grid"></div>
+        <details class="info">
+          <summary>Info</summary>
+          <div class="body">Elenco periferiche con indirizzo che devono contribuire a `CntotBanconoteIN`.</div>
+        </details>
       </div>
-      <div class="row row-top">
+      <div class="field">
         <label>Contatore banconote OUT</label>
-        <div class="mask-group">
-          <div id="billOutValidatorMaskGroup" class="mask-grid"></div>
-          <div class="hint">Elenco periferiche con indirizzo che devono contribuire a `CntotBanconoteOUT`. La stessa periferica puo essere selezionata sia in IN sia in OUT.</div>
-        </div>
+        <div id="billOutValidatorMaskGroup" class="mask-grid"></div>
+        <details class="info">
+          <summary>Info</summary>
+          <div class="body">Elenco periferiche con indirizzo che devono contribuire a `CntotBanconoteOUT`. La stessa periferica puo essere selezionata sia in IN sia in OUT.</div>
+        </details>
       </div>
-      <div class="row row-top">
+      <div class="field">
         <label>Periferiche non utilizzate o sconosciute</label>
-        <div class="mask-group">
-          <ul id="unusedPeripheralList" class="device-list"></ul>
-          <div class="hint">Elenco delle periferiche presenti sul bus ma non assegnate a contatori, oppure non riconosciute.</div>
-        </div>
+        <ul id="unusedPeripheralList" class="device-list"></ul>
+        <details class="info">
+          <summary>Info</summary>
+          <div class="body">Elenco delle periferiche presenti sul bus ma non assegnate a contatori, oppure non riconosciute.</div>
+        </details>
       </div>
     </div>
-    <div class="actions">
-      <button id="btnSave" type="button">Salva</button>
-      <a href="/">Menu</a>
-      <a href="/status">Stato</a>
+
+    <div class="card">
+      <div class="btn-row">
+        <button id="btnSave" class="btn" type="button">Salva</button>
+        <a class="btn secondary" href="/">Menu</a>
+        <a class="btn secondary" href="/status">Stato</a>
+      </div>
+      <div id="status" class="status-text"></div>
     </div>
-    <div id="status" class="status"></div>
-  </div>
+  </main>
   <script>
     const MANUAL_WIFI_VALUE = '__manual__';
     let currentPeripheralCatalog = {
@@ -1477,6 +1539,24 @@ void WebServerService::handleSettingsPage() {
       await refreshWifiIndicator();
     }
 
+    async function testWifi() {
+      const statusEl = document.getElementById('wifiTestStatus');
+      const ssid = selectedWifiSsid();
+      if (!ssid) { statusEl.textContent = 'Seleziona una rete WiFi prima di testare.'; return; }
+      statusEl.textContent = 'Connessione a "' + ssid + '" in corso (max 15 s)...';
+      const params = new URLSearchParams();
+      params.set('wifiSsid', ssid);
+      params.set('wifiPass', document.getElementById('wifiPass').value);
+      const r = await fetch('/api/wifi/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params.toString()
+      });
+      const data = await r.json();
+      statusEl.textContent = data.ok ? ('✅ ' + data.message) : ('❌ ' + data.message);
+      await refreshWifiIndicator();
+    }
+
     document.getElementById('btnSave').addEventListener('click', () => {
       saveSettings().catch(() => {
         document.getElementById('status').textContent = 'Errore rete durante salvataggio';
@@ -1486,6 +1566,11 @@ void WebServerService::handleSettingsPage() {
     document.getElementById('btnScanWifi').addEventListener('click', () => {
       loadWifiNetworks(selectedWifiSsid()).catch(() => {
         wifiStatus().textContent = 'Errore durante la scansione WiFi';
+      });
+    });
+    document.getElementById('btnTestWifi').addEventListener('click', () => {
+      testWifi().catch(() => {
+        document.getElementById('wifiTestStatus').textContent = 'Errore rete durante il test WiFi';
       });
     });
     document.getElementById('btnTestConnection').addEventListener('click', () => {
@@ -2323,6 +2408,33 @@ void WebServerService::handleApiTestConnection() {
   out.reserve(256);
   out += "{\"ok\":";
   out += (ok ? "true" : "false");
+  out += ",\"message\":\"";
+  appendJsonEscaped(out, message.c_str());
+  out += "\"}";
+  _server.send(ok ? 200 : 400, "application/json", out);
+}
+
+void WebServerService::handleApiWifiTest() {
+  if (_uiMode != UI_MODE_PROG) {
+    _server.send(403, "application/json", "{\"ok\":false,\"message\":\"solo modalita PROG\"}");
+    return;
+  }
+  if (!_onWifiTest) {
+    _server.send(500, "application/json", "{\"ok\":false,\"message\":\"azione non configurata\"}");
+    return;
+  }
+  const String ssid = _server.arg("wifiSsid");
+  const String pass = _server.arg("wifiPass");
+  if (ssid.length() == 0) {
+    _server.send(400, "application/json", "{\"ok\":false,\"message\":\"SSID mancante\"}");
+    return;
+  }
+  String message;
+  const bool ok = _onWifiTest(ssid.c_str(), pass.c_str(), message, _wifiTestUserData);
+  String out;
+  out.reserve(256);
+  out += "{\"ok\":";
+  out += ok ? "true" : "false";
   out += ",\"message\":\"";
   appendJsonEscaped(out, message.c_str());
   out += "\"}";

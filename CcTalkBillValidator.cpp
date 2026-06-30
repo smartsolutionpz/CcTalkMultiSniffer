@@ -1400,6 +1400,15 @@ bool CcTalkBillValidator::applyMd100RecyclerInventory(BillValidatorState& state,
   uint16_t c50 = 0;
   if (!parseRecyclerInventory(data, len, c10, c20, c50)) return false;
 
+  // Se il BV risponde con tutti zero ma abbiamo gia contatori non-zero precaricati
+  // (tipicamente da FRAM al boot), ignoriamo la risposta: l'NV0201 puo riportare
+  // zero transientemente prima che la sua NVM interna sia caricata.
+  if (c10 == 0 && c20 == 0 && c50 == 0 &&
+      state.recyclerInventoryValid &&
+      (state.recyclerCount10 != 0 || state.recyclerCount20 != 0 || state.recyclerCount50 != 0)) {
+    return false;
+  }
+
   state.recyclerCount10 = c10;
   state.recyclerCount20 = c20;
   state.recyclerCount50 = c50;

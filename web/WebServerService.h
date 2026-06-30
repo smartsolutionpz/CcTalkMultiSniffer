@@ -41,6 +41,7 @@ public:
                                                       void* userData);
   typedef bool (*SaveSettingsCallback)(const AppSettings& in, String& message, void* userData);
   typedef bool (*TestConnectionCallback)(const AppSettings& in, String& message, void* userData);
+  typedef bool (*WifiTestCallback)(const char* ssid, const char* pass, String& message, void* userData);
   typedef bool (*EnterProgModeCallback)(String& message, void* userData);
 
   explicit WebServerService(SystemStatus& status, WifiService& wifi, uint16_t port = 80);
@@ -61,12 +62,14 @@ public:
                           TestConnectionCallback onTestConnection,
                           void* userData);
   void setEnterProgModeAction(EnterProgModeCallback cb, void* userData);
+  void setWifiTestAction(WifiTestCallback cb, void* userData);
 
 private:
   // Handler HTML/API.
   void handleRoot();
   void handleStatusPage();
   void handleSettingsPage();
+  void handleAppCss();
   void handleHealth();
   void handleApiStatus();
   void handleApiLogs();
@@ -78,6 +81,7 @@ private:
   void handleApiGetSettings();
   void handleApiSaveSettings();
   void handleApiTestConnection();
+  void handleApiWifiTest();
   void handleApiEnterProgMode();
   void appendSettingsJson(String& out,
                           const AppSettings& settings,
@@ -108,6 +112,8 @@ private:
   void* _settingsUserData = nullptr;
   EnterProgModeCallback _onEnterProgMode = nullptr;
   void* _enterProgModeUserData = nullptr;
+  WifiTestCallback _onWifiTest = nullptr;
+  void* _wifiTestUserData = nullptr;
 };
 
 } // namespace ccms

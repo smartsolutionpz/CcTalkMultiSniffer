@@ -242,7 +242,14 @@ void RemoteRegistroEventiService::buildDeviceLabel(char* out, size_t outLen) {
 }
 
 void RemoteRegistroEventiService::setEndpointUrl(const char* url) {
+  const bool changed = strncmp(_endpoint, url ? url : "", sizeof(_endpoint)) != 0;
   copyBounded(url, _endpoint, sizeof(_endpoint));
+  if (changed) {
+    _internetAvailable = false;
+    _internetFailureLogged = false;
+    _connectionSnapshotPending = true;
+    _lastInternetCheckMs = 0;
+  }
   updateActiveFlag();
 }
 
@@ -254,6 +261,7 @@ void RemoteRegistroEventiService::setLocationCode(const char* code) {
   _pendingAppliedRequestOk = false;
   _pendingAppliedResponseMessage[0] = '\0';
   _requestState = REQUEST_STATE_IDLE;
+  _connectionSnapshotPending = true;
   updateActiveFlag();
 }
 
@@ -304,10 +312,18 @@ void RemoteRegistroEventiService::setMqttConfig(const char* host, uint16_t port,
   _mqttBrokerPort = (port == 0) ? 8883 : port;
   copyBounded(username, _mqttUsername, sizeof(_mqttUsername));
   copyBounded(password, _mqttPassword, sizeof(_mqttPassword));
+  if (_mqttClient.connected()) _mqttClient.disconnect();
+  _status.setMqttConnected(false);
+  _lastMqttReconnectAttemptMs = 0;
+  updateActiveFlag();
 }
 
 void RemoteRegistroEventiService::setMqttEnabled(bool enabled) {
   _mqttEnabled = enabled;
+  if (!enabled && _mqttClient.connected()) _mqttClient.disconnect();
+  if (!enabled) _status.setMqttConnected(false);
+  _lastMqttReconnectAttemptMs = 0;
+  updateActiveFlag();
 }
 
 void RemoteRegistroEventiService::updateActiveFlag() {
@@ -330,6 +346,11 @@ bool RemoteRegistroEventiService::begin() {
   _wifiConnectedSinceMs = 0;
   _remoteBackoffUntilMs = 0;
   _lastWifiConnected = false;
+  _internetAvailable = false;
+  _internetFailureLogged = false;
+  _connectionSnapshotPending = true;
+  _lastInternetCheckMs = 0;
+  _lastConnectionSnapshotAttemptMs = 0;
   _consecutiveFailures = 0;
   _remoteBackoffLogged = false;
   _requestState = REQUEST_STATE_IDLE;
@@ -806,16 +827,101 @@ bool RemoteRegistroEventiService::postResponse(const PendingRequest& request,
   return (httpCode >= 200 && httpCode < 300) && success && (updatedId > 0);
 }
 
+bool RemoteRegistroEventiService::testInternetConnection(String& responseMessage) {
+  responseMessage = "";
+  if (!isSupportedUrl(_endpoint)) {
+    responseMessage = "endpoint HTTP di test non configurato";
+    return false;
+  }
+
+  String testUrl(_endpoint);
+  const int queryPos = testUrl.indexOf('?');
+  if (queryPos >= 0) testUrl.remove(queryPos);
+  const int fragmentPos = testUrl.indexOf('#');
+  if (fragmentPos >= 0) testUrl.remove(fragmentPos);
+
+  if (testUrl.endsWith("/test_connection.php")) {
+    // URL gia pronto.
+  } else if (testUrl.endsWith(".php")) {
+    const int slashPos = testUrl.lastIndexOf('/');
+    if (slashPos >= 0) {
+      testUrl = testUrl.substring(0, slashPos + 1);
+    } else {
+      testUrl = "";
+    }
+    testUrl += "test_connection.php";
+  } else {
+    if (!testUrl.endsWith("/")) testUrl += "/";
+    testUrl += "test_connection.php";
+  }
+
+  const bool https = testUrl.startsWith("https://");
+  int httpCode = -1;
+  String body;
+
+  if (https) {
+    HTTPClient http;
+    WiFiClientSecure client;
+    client.setInsecure();
+    if (!http.begin(client, testUrl)) {
+      responseMessage = "impossibile aprire endpoint HTTPS di test";
+      return false;
+    }
+    http.setTimeout(_timeoutMs);
+    if (_apiKey[0] != '\0') http.addHeader("X-API-Key", _apiKey);
+    httpCode = http.GET();
+    body = http.getString();
+    http.end();
+  } else {
+    HTTPClient http;
+    WiFiClient client;
+    if (!http.begin(client, testUrl)) {
+      responseMessage = "impossibile aprire endpoint HTTP di test";
+      return false;
+    }
+    http.setTimeout(_timeoutMs);
+    if (_apiKey[0] != '\0') http.addHeader("X-API-Key", _apiKey);
+    httpCode = http.GET();
+    body = http.getString();
+    http.end();
+  }
+
+  if (httpCode >= 200 && httpCode < 300) {
+    responseMessage = responseMessageText(body);
+    if (responseMessage.length() == 0) responseMessage = "connessione verificata";
+    return true;
+  }
+
+  responseMessage = "HTTP ";
+  responseMessage += String(httpCode);
+  const String serverMessage = responseMessageText(body);
+  if (serverMessage.length() > 0) {
+    responseMessage += " - ";
+    responseMessage += serverMessage;
+  }
+  return false;
+}
+
 void RemoteRegistroEventiService::loop() {
   if (!_started || !_enabled || !_active) return;
 
   const bool wifiConnected = _wifi.isConnected();
   const bool justConnected = (wifiConnected && !_lastWifiConnected);
+  const bool justDisconnected = (!wifiConnected && _lastWifiConnected);
   _lastWifiConnected = wifiConnected;
 
   const uint32_t now = millis();
   if (!wifiConnected) {
     _wifiConnectedSinceMs = 0;
+    _internetAvailable = false;
+    _internetFailureLogged = false;
+    _connectionSnapshotPending = true;
+    _lastInternetCheckMs = 0;
+    _status.setMqttConnected(false);
+    if (justDisconnected && _mqttClient.connected()) {
+      _mqttClient.disconnect();
+      logLine("[MQTT] disconnesso: collegamento WiFi assente");
+    }
     return;
   }
 
@@ -823,11 +929,71 @@ void RemoteRegistroEventiService::loop() {
     _wifiConnectedSinceMs = now;
     _lastAttemptMs = now;
     _lastDbPollMs = now;
+    _internetAvailable = false;
+    _internetFailureLogged = false;
+    _connectionSnapshotPending = true;
+    _lastInternetCheckMs = 0;
+    _lastConnectionSnapshotAttemptMs = 0;
     if (_mqttEnabled) _lastMqttReconnectAttemptMs = 0;
     return;
   }
 
   if ((uint32_t)(now - _wifiConnectedSinceMs) < appconfig::REMOTE_DB_WIFI_SETTLE_MS) return;
+
+  const bool internetCheckDue =
+      (_lastInternetCheckMs == 0) ||
+      ((uint32_t)(now - _lastInternetCheckMs) >=
+       (_internetAvailable ? appconfig::REMOTE_INTERNET_CHECK_INTERVAL_MS
+                           : appconfig::REMOTE_INTERNET_RETRY_INTERVAL_MS));
+  if (internetCheckDue) {
+    _lastInternetCheckMs = now;
+    String testMessage;
+    const bool testOk = testInternetConnection(testMessage);
+    if (testOk) {
+      if (!_internetAvailable) {
+        _internetAvailable = true;
+        _internetFailureLogged = false;
+        _connectionSnapshotPending = true;
+        _lastConnectionSnapshotAttemptMs = 0;
+        _lastMqttReconnectAttemptMs = now - appconfig::MQTT_RECONNECT_INTERVAL_MS;
+        logLine("[NET] connessione Internet verificata");
+      }
+    } else {
+      if (_internetAvailable || !_internetFailureLogged) {
+        char line[224] = {0};
+        snprintf(line, sizeof(line),
+                 "[NET] test connessione Internet fallito: %s",
+                 testMessage.length() > 0 ? testMessage.c_str() : "test fallito");
+        logLine(line);
+      }
+      _internetAvailable = false;
+      _internetFailureLogged = true;
+      _status.setMqttConnected(false);
+      if (_mqttClient.connected()) _mqttClient.disconnect();
+    }
+  }
+
+  // Senza un test Internet valido non tenta MQTT, non interroga il DB remoto
+  // e non invia dati contabili.
+  if (!_internetAvailable) return;
+
+  if (_connectionSnapshotPending &&
+      (_lastConnectionSnapshotAttemptMs == 0 ||
+       (uint32_t)(now - _lastConnectionSnapshotAttemptMs) >= _retryIntervalMs)) {
+    _lastConnectionSnapshotAttemptMs = now;
+    String saveMessage;
+    if (saveChangeEventInternal("automatico alla connessione", saveMessage)) {
+      _connectionSnapshotPending = false;
+      logLine("[REMOTE_DB] dati contabili attuali inviati dopo connessione Internet");
+    } else {
+      char line[224] = {0};
+      snprintf(line, sizeof(line),
+               "[REMOTE_DB] invio contabile automatico fallito: %s; nuovo tentativo tra %lums",
+               saveMessage.length() > 0 ? saveMessage.c_str() : "errore sconosciuto",
+               (unsigned long)_retryIntervalMs);
+      logLine(line);
+    }
+  }
 
   if (_mqttEnabled) {
     mqttLoop();
@@ -950,6 +1116,11 @@ void RemoteRegistroEventiService::mqttBuildResponseTopic(char* buf, size_t len) 
 }
 
 bool RemoteRegistroEventiService::mqttConnect() {
+  if (!_wifi.isConnected() || !_internetAvailable) {
+    _status.setMqttConnected(false);
+    return false;
+  }
+
   char clientId[32] = {0};
   snprintf(clientId, sizeof(clientId), "cctalk-%s", _locationCode);
 

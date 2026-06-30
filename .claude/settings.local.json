@@ -16,7 +16,9 @@
       "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\peppe\\\\Documents\\\\GitHub\\\\CcTalkMultiSniffer\" -Recurse -Directory)",
       "Bash(Select-Object -ExpandProperty FullName)",
       "Bash(Sort-Object)",
-      "WebFetch(domain:forum.seeedstudio.com)"
+      "WebFetch(domain:forum.seeedstudio.com)",
+      "Bash(find \"C:/Users/peppe/.platformio/packages\" -name \"sdkconfig.h\" 2>/dev/null | grep -i \"c6\\\\|esp32c6\" | head -5)",
+      "Read(//c/Users/peppe/.platformio/packages/**)"
     ]
   }
 }

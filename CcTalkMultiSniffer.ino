@@ -344,6 +344,7 @@ static bool onWebGetPresentPeripheralCatalog(bool& coinAcceptorPresent,
                                              void* userData);
 static bool onWebSaveSettings(const ccms::AppSettings& in, String& message, void* userData);
 static bool onWebTestConnection(const ccms::AppSettings& in, String& message, void* userData);
+static bool onWebWifiTest(const char* ssid, const char* pass, String& message, void* userData);
 static bool onRemoteMasterRequest(const char* command,
                                   const char* requestPayload,
                                   String& responseMessage,
@@ -1352,6 +1353,39 @@ static bool onWebTestConnection(const ccms::AppSettings& in, String& message, vo
   return false;
 }
 
+static bool onWebWifiTest(const char* ssid, const char* pass, String& message, void* userData) {
+  (void)userData;
+  if (!ssid || ssid[0] == '\0') {
+    message = "SSID non specificato";
+    return false;
+  }
+  g_wifi.setCredentials(ssid, pass ? pass : "");
+  g_wifi.reconnect();
+
+  const uint32_t startMs = millis();
+  while ((uint32_t)(millis() - startMs) < kWebTestWifiTimeoutMs) {
+    g_wifi.loop();
+    if (g_wifi.isConnected()) {
+      message = "connesso a \"";
+      message += ssid;
+      message += "\"  IP: ";
+      message += g_wifi.ip();
+      message += "  RSSI: ";
+      message += String(g_wifi.rssi());
+      message += " dBm";
+      logRuntimeLine("[WEB] test WiFi riuscito", true);
+      return true;
+    }
+    delay(100);
+  }
+
+  message = "timeout — rete non raggiunta: \"";
+  message += ssid;
+  message += "\"";
+  logRuntimeLine("[WEB] test WiFi fallito (timeout)", true);
+  return false;
+}
+
 static void runBillValidatorManualTests() {
   logRuntimeLine("");
   logRuntimeLine("=== BILL VALIDATOR MANUAL TEST START ===", true);
@@ -2350,13 +2384,32 @@ static bool onRemoteMasterRequest(const char* command,
       strcmp(normalizedCommand, "SET_CURRENT_VALUE") == 0 ||
       strcmp(normalizedCommand, "SET_COIN_BASE") == 0 ||
       strcmp(normalizedCommand, "IMPOSTA_LIVELLO_INIZIALE") == 0) {
+    {
+      char dbg[192] = {0};
+      snprintf(dbg, sizeof(dbg),
+               "[REMOTE_DB] IMPOSTA_VALORE_ATTUALE payload_raw='%s' (len=%u)",
+               payload, (unsigned)strlen(payload));
+      logRuntimeLine(dbg, true);
+    }
     int64_t coinLevelBaseCents = 0;
     bool useCurrentCoinLevel = false;
     if (!parseRemoteCoinLevelBasePayload(payload,
                                          coinLevelBaseCents,
                                          useCurrentCoinLevel,
                                          responseMessage)) {
+      char dbg[128] = {0};
+      snprintf(dbg, sizeof(dbg),
+               "[REMOTE_DB] IMPOSTA_VALORE_ATTUALE parse FALLITO: %s",
+               responseMessage.c_str());
+      logRuntimeLine(dbg, true);
       return false;
+    }
+    {
+      char dbg[128] = {0};
+      snprintf(dbg, sizeof(dbg),
+               "[REMOTE_DB] IMPOSTA_VALORE_ATTUALE parse OK: useCurrentLevel=%d coinLevelBaseCents=%ld",
+               (int)useCurrentCoinLevel, (long)coinLevelBaseCents);
+      logRuntimeLine(dbg, true);
     }
 
     if (useCurrentCoinLevel) {
@@ -3403,6 +3456,7 @@ static void initNetworkServices() {
                            onWebTestConnection,
                            nullptr);
   g_web.setEnterProgModeAction(onWebEnterProgMode, nullptr);
+  g_web.setWifiTestAction(onWebWifiTest, nullptr);
 
   if (g_bootMode == BOOT_MODE_PROG) {
     g_wifi.beginApOnly();

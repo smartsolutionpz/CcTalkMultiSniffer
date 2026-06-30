@@ -107,6 +107,7 @@ private:
                     const char* responseMessage,
                     String* serverResponseMessage = nullptr);
   bool saveChangeEventInternal(const char* trigger, String& message);
+  bool testInternetConnection(String& responseMessage);
   bool fetchPendingRequest(PendingRequest& out, String& responseMessage);
   void buildJsonPayload(const QueuedEvent& event, String& out) const;
   void buildResponseJsonPayload(const PendingRequest& request,
@@ -161,6 +162,11 @@ private:
   uint8_t _consecutiveFailures = 0;
   bool _remoteBackoffLogged = false;
   bool _lastWifiConnected = false;
+  bool _internetAvailable = false;
+  bool _internetFailureLogged = false;
+  bool _connectionSnapshotPending = true;
+  uint32_t _lastInternetCheckMs = 0;
+  uint32_t _lastConnectionSnapshotAttemptMs = 0;
   RequestProtocolState _requestState = REQUEST_STATE_IDLE;
   uint32_t _lastHandledRequestId = 0;
   char _lastHandledRequestSignature[384] = {0};

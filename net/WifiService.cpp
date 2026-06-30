@@ -150,14 +150,18 @@ bool WifiService::begin() {
   _disconnectReasonPending = false;
 
 #if defined(CONFIG_IDF_TARGET_ESP32C6)
+  // FM8625H RF switch: GPIO3=LOW abilita lo switch (altrimenti nessuna antenna e' connessa).
+  // GPIO14=LOW seleziona PCB interna, GPIO14=HIGH seleziona IPEX esterna.
+  // Entrambi i GPIO vanno configurati esplicitamente: non fare affidamento sullo stato di boot.
+  pinMode(3, OUTPUT);
+  digitalWrite(3, LOW);   // abilita RF switch FM8625H
+  pinMode(14, OUTPUT);
   if (appconfig::WIFI_USE_EXTERNAL_ANTENNA) {
-    pinMode(3, OUTPUT);
-    digitalWrite(3, LOW);    // alimenta RF switch FM8625H
-    pinMode(14, OUTPUT);
-    digitalWrite(14, HIGH);  // seleziona antenna esterna
-    logLine("[WIFI] antenna: esterna (GPIO3=LOW GPIO14=HIGH)");
+    digitalWrite(14, HIGH);
+    logLine("[WIFI] antenna: esterna IPEX (GPIO3=LOW GPIO14=HIGH)");
   } else {
-    logLine("[WIFI] antenna: interna PCB");
+    digitalWrite(14, LOW);
+    logLine("[WIFI] antenna: interna PCB (GPIO3=LOW GPIO14=LOW)");
   }
 #endif
   WiFi.persistent(false);
@@ -195,6 +199,18 @@ bool WifiService::beginApOnly() {
   _lastLoggedStatusValid = false;
   _disconnectReasonPending = false;
 
+#if defined(CONFIG_IDF_TARGET_ESP32C6)
+  pinMode(3, OUTPUT);
+  digitalWrite(3, LOW);
+  pinMode(14, OUTPUT);
+  if (appconfig::WIFI_USE_EXTERNAL_ANTENNA) {
+    digitalWrite(14, HIGH);
+    logLine("[WIFI] antenna: esterna IPEX (GPIO3=LOW GPIO14=HIGH)");
+  } else {
+    digitalWrite(14, LOW);
+    logLine("[WIFI] antenna: interna PCB (GPIO3=LOW GPIO14=LOW)");
+  }
+#endif
   WiFi.persistent(false);
   WiFi.disconnect(false, false);
   WiFi.mode(WIFI_AP);
@@ -491,22 +507,20 @@ void WifiService::enforcePerformanceMode(bool logResult) {
 #if defined(ARDUINO_ARCH_ESP32)
   psOk = (esp_wifi_set_ps(WIFI_PS_NONE) == ESP_OK);
   if (appconfig::WIFI_FORCE_LEGACY_24G) {
-    // ESP32C6 e' un dispositivo WiFi 6 (802.11ax): includere 11AX nel mask
-    // evita che la restrizione di protocollo impedisca la connessione su AP moderni.
 #if defined(CONFIG_IDF_TARGET_ESP32C6)
-    const uint8_t protocol = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_11AX;
+    // Su ESP32C6 (WiFi 6 nativo, ESP-IDF 5.x) non si applicano restrizioni legacy:
+    // esp_wifi_set_protocol/bandwidth interferiscono con il radio 802.11ax
+    // e non possono essere chiamate prima di esp_wifi_start().
 #else
     const uint8_t protocol = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N;
-#endif
     const wifi_mode_t currentMode = WiFi.getMode();
     legacyOk = (esp_wifi_set_protocol(WIFI_IF_STA, protocol) == ESP_OK);
     legacyOk = legacyOk && (esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20) == ESP_OK);
-    // Impostare WIFI_IF_AP in modalita' STA-only causa ESP_ERR_WIFI_IF su ESP32C6
-    // e puo' corrompere lo stato dello stack WiFi.
     if (currentMode == WIFI_AP || currentMode == WIFI_AP_STA) {
       legacyOk = legacyOk && (esp_wifi_set_protocol(WIFI_IF_AP, protocol) == ESP_OK);
       legacyOk = legacyOk && (esp_wifi_set_bandwidth(WIFI_IF_AP, WIFI_BW_HT20) == ESP_OK);
     }
+#endif
   }
 #endif
 
@@ -589,7 +603,13 @@ void WifiService::startConnectAttempt() {
   } else {
     WiFi.mode(WIFI_STA);
   }
-  configureCommonRadio();
+  // Solo le impostazioni che devono precedere WiFi.begin().
+  // enforcePerformanceMode viene chiamata DOPO begin() perche'
+  // su ESP32C6 le chiamate esp_wifi_set_* richiedono esp_wifi_start() attivo.
+  WiFi.setAutoReconnect(false);
+  if (_hostname && _hostname[0] != '\0') {
+    WiFi.setHostname(_hostname);
+  }
 
   _connecting = true;
   _attemptStartMs = millis();
@@ -611,6 +631,8 @@ void WifiService::startConnectAttempt() {
   } else {
     beginStatus = WiFi.begin(_ssid);
   }
+  // Applica le impostazioni radio dopo WiFi.begin() (che chiama esp_wifi_start()).
+  enforcePerformanceMode(true);
   snprintf(line, sizeof(line), "[WIFI] WiFi.begin returned: %s (%d)",
            wlStatusText(beginStatus),
            (int)beginStatus);

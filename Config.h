@@ -38,7 +38,7 @@ static const uint32_t NTP_RESYNC_INTERVAL_MS = 21600000UL;
 // Seeed XIAO ESP32C6:
 // D7/GPIO17 = RX sniff ccTalk, D4/GPIO22 = SDA, D5/GPIO23 = SCL.
 // RF switch FM8625H: GPIO3=LOW abilita switch, GPIO14=HIGH seleziona antenna esterna.
-static const bool WIFI_USE_EXTERNAL_ANTENNA = false; // true = antenna esterna IPEX
+static const bool WIFI_USE_EXTERNAL_ANTENNA = true; // true = antenna esterna IPEX
 static const int CCTALK_UART_RX_PIN = 17;  // RX sniff ccTalk
 static const int CCTALK_UART_TX_PIN = -1;  // RX-only
 static const int FRAM_I2C_SDA_PIN = 22;
@@ -115,6 +115,8 @@ static const uint16_t REMOTE_DB_HTTP_TIMEOUT_MS = 500;
 static const uint32_t REMOTE_DB_POLL_INTERVAL_MS = 30000;
 static const uint32_t REMOTE_DB_RETRY_INTERVAL_MS = 60000;
 static const uint32_t REMOTE_DB_WIFI_SETTLE_MS = 3000;
+static const uint32_t REMOTE_INTERNET_CHECK_INTERVAL_MS = 30000;
+static const uint32_t REMOTE_INTERNET_RETRY_INTERVAL_MS = 15000;
 static const uint32_t REMOTE_DB_FAILURE_BACKOFF_BASE_MS = 60000;
 static const uint32_t REMOTE_DB_FAILURE_BACKOFF_MAX_MS = 300000;
 static const uint32_t MQTT_RECONNECT_INTERVAL_MS = 15000;
