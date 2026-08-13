@@ -108,6 +108,7 @@ bool AppSettingsStore::load(AppSettings& out) {
       sanitizeBillValidatorContributionMask(prefs.getUShort("bill_in_vm", kAllBillValidatorMask));
   out.billOutValidatorMask =
       sanitizeBillValidatorContributionMask(prefs.getUShort("bill_out_vm", kAllBillValidatorMask));
+  out.billRecyclerUseInventoryCommand = prefs.getBool("bv_rc_inv", true);
   if (!hasHopperModelMasks) {
     out.hopperAlbericiDiscriminatorMask =
         (out.hopperModel == HOPPER_MODEL_ALBERICI_DISCRIMINATOR) ? kAllHopperMask : 0;
@@ -191,6 +192,7 @@ bool AppSettingsStore::save(const AppSettings& in) {
        prefs.putUShort("bill_in_vm", sanitizeBillValidatorContributionMask(in.billInValidatorMask)) > 0;
   ok = ok &&
        prefs.putUShort("bill_out_vm", sanitizeBillValidatorContributionMask(in.billOutValidatorMask)) > 0;
+  ok = ok && prefs.putBool("bv_rc_inv", in.billRecyclerUseInventoryCommand) > 0;
   ok = ok && prefs.putUShort("db_port", in.dbPort) > 0;
   ok = ok && prefs.putUShort("mqtt_port", in.mqttBrokerPort) > 0;
   ok = ok && prefs.putBool("mqtt_en", in.mqttEnabled) > 0;

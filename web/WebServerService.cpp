@@ -145,11 +145,13 @@ WebServerService::WebServerService(SystemStatus& status, WifiService& wifi, uint
 void WebServerService::setActions(ResetCountersCallback onResetCounters,
                                   SetCoinBaseCallback onSetCoinBase,
                                   SetBillRecyclerBaseCallback onSetBillRecyclerBase,
+                                  SetBillRecyclerInventoryModeCallback onSetBillRecyclerInventoryMode,
                                   SaveRemoteSnapshotCallback onSaveRemoteSnapshot,
                                   void* userData) {
   _onResetCounters = onResetCounters;
   _onSetCoinBase = onSetCoinBase;
   _onSetBillRecyclerBase = onSetBillRecyclerBase;
+  _onSetBillRecyclerInventoryMode = onSetBillRecyclerInventoryMode;
   _onSaveRemoteSnapshot = onSaveRemoteSnapshot;
   _actionsUserData = userData;
 }
@@ -199,6 +201,8 @@ void WebServerService::begin() {
   _server.on("/api/counters/reset", HTTP_POST, [this]() { handleApiResetCounters(); });
   _server.on("/api/coins/base", HTTP_POST, [this]() { handleApiSetCoinBase(); });
   _server.on("/api/bills/recycler/base", HTTP_POST, [this]() { handleApiSetBillRecyclerBase(); });
+  _server.on("/api/bills/recycler/inventory-mode", HTTP_POST,
+             [this]() { handleApiSetBillRecyclerInventoryMode(); });
   _server.on("/api/remote/change", HTTP_POST, [this]() { handleApiSaveRemoteSnapshot(); });
   _server.on("/api/mode/prog", HTTP_POST, [this]() { handleApiEnterProgMode(); });
   _server.onNotFound([this]() { _server.send(404, "text/plain", "Not found"); });
@@ -360,6 +364,22 @@ void WebServerService::handleRoot() {
         <div class="body">Inserisci manualmente il numero di banconote presenti nelle tre cassette recycler.</div>
       </details>
     </div>
+    <div class="card">
+      <h2>Modalita recycler MD100</h2>
+      <div class="field">
+        <label class="checkbox-row">
+          <input id="billRecyclerUseInventoryCommand" type="checkbox">
+          Usa il comando inventory del recycler come valore prioritario
+        </label>
+      </div>
+      <div class="btn-row">
+        <button id="btnSaveBillRecyclerMode" class="btn" type="button">Salva modalita recycler</button>
+      </div>
+      <details class="info">
+        <summary>Info</summary>
+        <div class="body">Se disattivato, il valore recycler MD100 viene calcolato solo dagli eventi di inserimento ed erogazione, ignorando il comando inventory.</div>
+      </details>
+    </div>
     <details class="collapsible">
       <summary>Note</summary>
       <div class="body status-text">
@@ -402,6 +422,16 @@ void WebServerService::handleRoot() {
         document.getElementById('wifiIndicator').textContent = 'WiFi: stato non disponibile';
       } finally {
         wifiIndicatorInFlight = false;
+      }
+    }
+
+    async function loadProgSettings() {
+      try {
+        const data = await fetch('/api/settings', { cache: 'no-store' }).then(r => r.json());
+        const settings = data && data.settings ? data.settings : {};
+        document.getElementById('billRecyclerUseInventoryCommand').checked =
+          settings.billRecyclerUseInventoryCommand !== false;
+      } catch (e) {
       }
     }
 
@@ -452,11 +482,32 @@ void WebServerService::handleRoot() {
       }
     }
 
+    async function saveBillRecyclerMode() {
+      const status = document.getElementById('progStatus');
+      const enabled = document.getElementById('billRecyclerUseInventoryCommand').checked;
+      status.textContent = 'Salvataggio modalita recycler in corso...';
+      try {
+        const body = new URLSearchParams();
+        body.set('billRecyclerUseInventoryCommand', enabled ? '1' : '0');
+        const r = await fetch('/api/bills/recycler/inventory-mode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: body.toString()
+        });
+        const data = await r.json();
+        status.textContent = data.ok ? `OK: ${s(data.message)}` : `Errore: ${s(data.message)}`;
+      } catch (e) {
+        status.textContent = 'Errore rete durante il salvataggio modalita recycler';
+      }
+    }
+
     document.getElementById('btnTestConnection').addEventListener('click', testConnection);
     document.getElementById('btnSaveBillRecycler').addEventListener('click', saveBillRecycler);
+    document.getElementById('btnSaveBillRecyclerMode').addEventListener('click', saveBillRecyclerMode);
     ['billCassette10Input', 'billCassette20Input', 'billCassette50Input'].forEach((id) => {
       document.getElementById(id).addEventListener('input', () => { billRecyclerDirty = true; });
     });
+    loadProgSettings();
     refreshWifiIndicator();
     setInterval(refreshWifiIndicator, 5000);
   </script>
@@ -880,6 +931,16 @@ void WebServerService::handleSettingsPage() {
         <details class="info">
           <summary>Info</summary>
           <div class="body">Elenco periferiche con indirizzo che devono contribuire a `CntotBanconoteOUT`. La stessa periferica puo essere selezionata sia in IN sia in OUT.</div>
+        </details>
+      </div>
+      <div class="field">
+        <label class="checkbox-row">
+          <input id="billRecyclerUseInventoryCommand" type="checkbox">
+          Recycler MD100: usa il comando inventory come fonte prioritaria del valore recycler
+        </label>
+        <details class="info">
+          <summary>Info</summary>
+          <div class="body">Disattiva questa opzione se vuoi calcolare il recycler MD100 solo dagli eventi di inserimento/erogazione e ignorare il comando inventory.</div>
         </details>
       </div>
       <div class="field">
@@ -1452,6 +1513,8 @@ void WebServerService::handleSettingsPage() {
       document.getElementById('mqttBrokerPort').value = s.mqttBrokerPort || 1883;
       document.getElementById('mqttUsername').value = s.mqttUsername || '';
       document.getElementById('mqttPassword').value = s.mqttPassword || '';
+      document.getElementById('billRecyclerUseInventoryCommand').checked =
+        s.billRecyclerUseInventoryCommand !== false;
       refreshRoutingAssignments(s);
       document.getElementById('status').textContent = data.ok ? 'Impostazioni caricate' : ('Errore: ' + (data.message || 'lettura'));
       await loadWifiNetworks(s.wifiSsid || '');
@@ -1477,6 +1540,8 @@ void WebServerService::handleSettingsPage() {
       params.set('mqttBrokerPort', document.getElementById('mqttBrokerPort').value);
       params.set('mqttUsername', document.getElementById('mqttUsername').value);
       params.set('mqttPassword', document.getElementById('mqttPassword').value);
+      params.set('billRecyclerUseInventoryCommand',
+        document.getElementById('billRecyclerUseInventoryCommand').checked ? '1' : '0');
       params.set('hopperAlbericiDiscriminatorMask', hopperModel1Mask);
       params.set('hopperAlbericiHopperCdMask', hopperModel2Mask);
       params.set('hopperSuzoEvolutionMask', hopperModel3Mask);
@@ -1895,6 +1960,39 @@ void WebServerService::handleApiSetBillRecyclerBase() {
   _server.send(ok ? 200 : 400, "application/json", out);
 }
 
+void WebServerService::handleApiSetBillRecyclerInventoryMode() {
+  String message;
+  bool ok = false;
+
+  if (!_onSetBillRecyclerInventoryMode) {
+    message = "azione non configurata";
+  } else {
+    String rawValue;
+    if (_server.hasArg("billRecyclerUseInventoryCommand")) {
+      rawValue = _server.arg("billRecyclerUseInventoryCommand");
+    } else if (_server.hasArg("enabled")) {
+      rawValue = _server.arg("enabled");
+    }
+
+    if (rawValue.length() == 0) {
+      message = "campo billRecyclerUseInventoryCommand mancante";
+    } else {
+      rawValue.trim();
+      const bool enabled = (rawValue == "1" || rawValue == "true" || rawValue == "on");
+      ok = _onSetBillRecyclerInventoryMode(enabled, message, _actionsUserData);
+    }
+  }
+
+  String out;
+  out.reserve(192);
+  out += "{\"ok\":";
+  out += (ok ? "true" : "false");
+  out += ",\"message\":\"";
+  appendJsonEscaped(out, message.c_str());
+  out += "\"}";
+  _server.send(ok ? 200 : 400, "application/json", out);
+}
+
 void WebServerService::handleApiSaveRemoteSnapshot() {
   String message;
   bool ok = false;
@@ -2043,6 +2141,8 @@ void WebServerService::appendSettingsJson(String& out,
   out += String((unsigned)settings.billInValidatorMask);
   out += ",\"billOutValidatorMask\":";
   out += String((unsigned)settings.billOutValidatorMask);
+  out += ",\"billRecyclerUseInventoryCommand\":";
+  out += (settings.billRecyclerUseInventoryCommand ? "true" : "false");
   out += ",\"presentCoinAcceptor\":";
   out += (presentCoinAcceptor ? "true" : "false");
   out += ",\"presentHopperMask\":";
@@ -2069,6 +2169,10 @@ bool WebServerService::parseSettingsFromRequest(AppSettings& out, String& messag
   const String coinAcceptorInValue = _server.arg("coinAcceptorInEnabled");
   out.coinAcceptorInEnabled =
       (coinAcceptorInValue == "1" || coinAcceptorInValue == "true" || coinAcceptorInValue == "on");
+  const String billRecyclerInventoryValue = _server.arg("billRecyclerUseInventoryCommand");
+  out.billRecyclerUseInventoryCommand =
+      !(billRecyclerInventoryValue == "0" || billRecyclerInventoryValue == "false" ||
+        billRecyclerInventoryValue == "off");
   uint8_t coinAcceptorFalconProfile = COIN_ACCEPTOR_FALCON_PROFILE_BLOCK0;
   if (_server.hasArg("coinAcceptorFalconProfile")) {
     const long parsedProfile = _server.arg("coinAcceptorFalconProfile").toInt();

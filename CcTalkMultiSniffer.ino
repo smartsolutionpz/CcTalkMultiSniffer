@@ -334,6 +334,7 @@ static bool onWebSetBillRecyclerBase(int64_t cassette10Count,
                                      int64_t cassette50Count,
                                      String& message,
                                      void* userData);
+static bool onWebSetBillRecyclerInventoryMode(bool enabled, String& message, void* userData);
 static bool onWebSaveRemoteSnapshot(String& message, void* userData);
 static bool onWebGetSettings(ccms::AppSettings& out, String& message, void* userData);
 static bool onWebGetPresentPeripheralCatalog(bool& coinAcceptorPresent,
@@ -1102,6 +1103,8 @@ static void selectDeviceModelsFromSettings() {
   g_hopperSuzoEvolution.setAddressMask(g_runtimeDeviceSettings.hopperSuzoEvolutionMask);
   g_billValidatorIpro.setAddressMask(g_runtimeDeviceSettings.billValidatorIproMask);
   g_billValidatorMd100.setAddressMask(g_runtimeDeviceSettings.billValidatorMd100Mask);
+  g_billValidatorMd100.setRecyclerInventoryCommandEnabled(
+      g_runtimeDeviceSettings.billRecyclerUseInventoryCommand);
   g_billValidatorSmartPayout.setAddressMask(g_runtimeDeviceSettings.billValidatorSmartPayoutMask);
   g_coin.setValueProfile(g_runtimeDeviceSettings.coinAcceptorFalconProfile);
 }
@@ -1300,7 +1303,9 @@ static bool onWebSaveSettings(const ccms::AppSettings& in, String& message, void
                                              g_appSettings.hopperCoinValueCents,
                                              sizeof(next.hopperCoinValueCents)) != 0) ||
                                      (next.billInValidatorMask != g_appSettings.billInValidatorMask) ||
-                                     (next.billOutValidatorMask != g_appSettings.billOutValidatorMask);
+                                     (next.billOutValidatorMask != g_appSettings.billOutValidatorMask) ||
+                                     (next.billRecyclerUseInventoryCommand !=
+                                      g_appSettings.billRecyclerUseInventoryCommand);
 
   if (!g_settingsStore.save(next)) {
     message = "errore salvataggio configurazione";
@@ -2980,6 +2985,34 @@ static bool onWebSetBillRecyclerBase(int64_t cassette10Count,
                                        message);
 }
 
+static bool onWebSetBillRecyclerInventoryMode(bool enabled, String& message, void* userData) {
+  (void)userData;
+  if (g_appSettings.billRecyclerUseInventoryCommand == enabled) {
+    message = enabled
+                  ? "modalita recycler invariata: inventory gia prioritario"
+                  : "modalita recycler invariata: uso gia solo eventi";
+    return true;
+  }
+
+  ccms::AppSettings next = g_appSettings;
+  next.billRecyclerUseInventoryCommand = enabled;
+  next.valid = true;
+
+  if (!g_settingsStore.save(next)) {
+    message = "errore salvataggio modalita recycler";
+    return false;
+  }
+
+  g_appSettings = next;
+  g_settingsLoaded = true;
+  selectDeviceModelsFromSettings();
+
+  message = enabled
+                ? "modalita recycler aggiornata: inventory MD100 prioritario"
+                : "modalita recycler aggiornata: MD100 calcolato solo da eventi";
+  return true;
+}
+
 static bool onWebSaveRemoteSnapshot(String& message, void* userData) {
   (void)userData;
   refreshEconomicStatusForRemoteSave();
@@ -3448,6 +3481,7 @@ static void initNetworkServices() {
   g_web.setActions(onWebResetCounters,
                    onWebSetCoinBase,
                    onWebSetBillRecyclerBase,
+                   onWebSetBillRecyclerInventoryMode,
                    onWebSaveRemoteSnapshot,
                    nullptr);
   g_web.setSettingsActions(onWebGetSettings,
@@ -3781,16 +3815,16 @@ static void initializeApplication() {
   // 1. rileva il contesto di boot
   // 2. carica la configurazione persistente
   // 3. attiva servizi utente/rete
-  // 4. ripristina eventuale baseline economica da FRAM
-  // 5. avvia lo sniffer ccTalk
+  // 4. avvia lo sniffer ccTalk e azzera i parser
+  // 5. ripristina baseline economica/recycler da FRAM sui parser gia pronti
   initLevelShifterEnable();
   initStatusLeds();
   detectBootMode();
   loadAppSettings();
   initNetworkServices();
   initTelemetryAndMeshServices();
-  initFramPersistence();
   initCcTalkSniffer();
+  initFramPersistence();
 }
 
 void setup() {

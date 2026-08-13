@@ -240,6 +240,7 @@ struct AppSettings {
   uint16_t hopperCoinValueCents[kHopperAddressCount] = {0};
   uint16_t billInValidatorMask = kAllBillValidatorMask;
   uint16_t billOutValidatorMask = kAllBillValidatorMask;
+  bool billRecyclerUseInventoryCommand = true;
   bool valid = false;
 
   // Riporta la struttura allo stato "default di fabbrica".
@@ -280,6 +281,7 @@ struct AppSettings {
     }
     billInValidatorMask = kAllBillValidatorMask;
     billOutValidatorMask = kAllBillValidatorMask;
+    billRecyclerUseInventoryCommand = true;
     valid = false;
   }
 };

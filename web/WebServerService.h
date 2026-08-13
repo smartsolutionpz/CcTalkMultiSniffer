@@ -31,6 +31,9 @@ public:
                                               int64_t cassette50Count,
                                               String& message,
                                               void* userData);
+  typedef bool (*SetBillRecyclerInventoryModeCallback)(bool enabled,
+                                                       String& message,
+                                                       void* userData);
   typedef bool (*SaveRemoteSnapshotCallback)(String& message, void* userData);
   typedef bool (*GetSettingsCallback)(AppSettings& out, String& message, void* userData);
   typedef bool (*GetPresentPeripheralCatalogCallback)(bool& coinAcceptorPresent,
@@ -54,6 +57,7 @@ public:
   void setActions(ResetCountersCallback onResetCounters,
                   SetCoinBaseCallback onSetCoinBase,
                   SetBillRecyclerBaseCallback onSetBillRecyclerBase,
+                  SetBillRecyclerInventoryModeCallback onSetBillRecyclerInventoryMode,
                   SaveRemoteSnapshotCallback onSaveRemoteSnapshot,
                   void* userData);
   void setSettingsActions(GetSettingsCallback onGetSettings,
@@ -77,6 +81,7 @@ private:
   void handleApiResetCounters();
   void handleApiSetCoinBase();
   void handleApiSetBillRecyclerBase();
+  void handleApiSetBillRecyclerInventoryMode();
   void handleApiSaveRemoteSnapshot();
   void handleApiGetSettings();
   void handleApiSaveSettings();
@@ -103,6 +108,7 @@ private:
   ResetCountersCallback _onResetCounters = nullptr;
   SetCoinBaseCallback _onSetCoinBase = nullptr;
   SetBillRecyclerBaseCallback _onSetBillRecyclerBase = nullptr;
+  SetBillRecyclerInventoryModeCallback _onSetBillRecyclerInventoryMode = nullptr;
   SaveRemoteSnapshotCallback _onSaveRemoteSnapshot = nullptr;
   void* _actionsUserData = nullptr;
   GetSettingsCallback _onGetSettings = nullptr;

@@ -136,6 +136,10 @@ void CcTalkBillValidator::setAddressMask(uint16_t mask) {
   _addressMask = (uint16_t)(mask & ((1u << kStateCount) - 1u));
 }
 
+void CcTalkBillValidator::setRecyclerInventoryCommandEnabled(bool enabled) {
+  _recyclerInventoryCommandEnabled = enabled;
+}
+
 bool CcTalkBillValidator::preloadRecyclerInventory(uint8_t addr,
                                                    uint16_t c10,
                                                    uint16_t c20,
@@ -1154,19 +1158,7 @@ bool CcTalkBillValidator::applyRecyclerDelta(BillValidatorState& state,
                                              uint8_t euro,
                                              int8_t delta) const {
   if (delta == 0) return false;
-
-  if (!state.recyclerInventoryValid) {
-    if (!usesMd100RecyclerInventory() &&
-        !usesSmartPayoutRecyclerInventory() &&
-        !usesIproRecyclerInventory()) {
-      return false;
-    }
-    state.recyclerCount10 = 0;
-    state.recyclerCount20 = 0;
-    state.recyclerCount50 = 0;
-    state.recyclerInventoryTotalEuro = 0;
-    state.recyclerInventoryValid = true;
-  }
+  if (!state.recyclerInventoryValid) return false;
 
   uint16_t* count = nullptr;
   switch (euro) {
@@ -1394,6 +1386,7 @@ bool CcTalkBillValidator::applyMd100RecyclerInventory(BillValidatorState& state,
                                                       const uint8_t* data,
                                                       uint8_t len) const {
   if (!usesMd100RecyclerInventory()) return false;
+  if (!_recyclerInventoryCommandEnabled) return false;
 
   uint16_t c10 = 0;
   uint16_t c20 = 0;

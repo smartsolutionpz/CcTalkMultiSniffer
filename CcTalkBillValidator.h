@@ -100,6 +100,7 @@ public:
   const BillValidatorState* stateFor(uint8_t addr) const;
   void dumpState(Stream& out) const;
   void setAddressMask(uint16_t mask);
+  void setRecyclerInventoryCommandEnabled(bool enabled);
   bool preloadRecyclerInventory(uint8_t addr, uint16_t c10, uint16_t c20, uint16_t c50);
   uint16_t addressMask() const { return _addressMask; }
   // Inietta direttamente un credito banconota (EUR) nel totalizzatore del BV.
@@ -115,6 +116,7 @@ private:
   const BillValidatorDataset& _dataset;
   BillValidatorState _states[kStateCount];
   uint16_t _addressMask = 0x07FFu;
+  bool _recyclerInventoryCommandEnabled = true;
 
   // Blocchi di supporto alla decodifica e all'aggiornamento di stato.
   bool addressEnabled(uint8_t addr) const;
