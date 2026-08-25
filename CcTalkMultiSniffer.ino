@@ -355,6 +355,11 @@ static bool parseRemoteCoinLevelBasePayload(const char* payload,
                                             int64_t& coinLevelBaseCents,
                                             bool& useCurrentCoinLevel,
                                             String& message);
+static bool parseRemoteBillRecyclerPayload(const char* payload,
+                                           uint16_t& cassette10Count,
+                                           uint16_t& cassette20Count,
+                                           uint16_t& cassette50Count,
+                                           String& message);
 static bool applyCoinBaseResetAction(uint32_t coinLevelBaseCents,
                                      const char* successLogLine,
                                      const char* successMessage,
@@ -2351,6 +2356,56 @@ static void normalizeRemoteCommandName(const char* value, char* out, size_t outL
   out[writeIndex] = '\0';
 }
 
+static bool parseRemoteBillRecyclerPayload(const char* payload,
+                                           uint16_t& cassette10Count,
+                                           uint16_t& cassette20Count,
+                                           uint16_t& cassette50Count,
+                                           String& message) {
+  if (!payload) {
+    message = "payload cassette recycler mancante";
+    return false;
+  }
+
+  const char* cursor = payload;
+  uint16_t values[3] = {0, 0, 0};
+  for (uint8_t i = 0; i < 3; ++i) {
+    while (*cursor == ' ' || *cursor == '\t') ++cursor;
+    if (*cursor < '0' || *cursor > '9') {
+      message = "payload non valido: usare quantita10/quantita20/quantita50";
+      return false;
+    }
+
+    char* end = nullptr;
+    const unsigned long value = strtoul(cursor, &end, 10);
+    if (end == cursor || value > 0xFFFFUL) {
+      message = "quantita cassette recycler fuori range";
+      return false;
+    }
+    values[i] = (uint16_t)value;
+    cursor = end;
+    while (*cursor == ' ' || *cursor == '\t') ++cursor;
+
+    if (i < 2) {
+      if (*cursor != '/') {
+        message = "payload non valido: usare quantita10/quantita20/quantita50";
+        return false;
+      }
+      ++cursor;
+    }
+  }
+
+  while (*cursor == ' ' || *cursor == '\t' || *cursor == '\r' || *cursor == '\n') ++cursor;
+  if (*cursor != '\0') {
+    message = "payload cassette recycler contiene dati inattesi";
+    return false;
+  }
+
+  cassette10Count = values[0];
+  cassette20Count = values[1];
+  cassette50Count = values[2];
+  return true;
+}
+
 static bool onRemoteMasterRequest(const char* command,
                                   const char* requestPayload,
                                   String& responseMessage,
@@ -2428,6 +2483,28 @@ static bool onRemoteMasterRequest(const char* command,
       (uint32_t)coinLevelBaseCents,
       "[REMOTE_DB] livello monete iniziale impostato da richiesta remota",
       "livello monete iniziale impostato; contatori e cassa azzerati",
+      responseMessage);
+  }
+
+  if (strcmp(normalizedCommand, "IMPOSTA_CASSETTE_RECYCLER") == 0) {
+    uint16_t cassette10Count = 0;
+    uint16_t cassette20Count = 0;
+    uint16_t cassette50Count = 0;
+    if (!parseRemoteBillRecyclerPayload(payload,
+                                        cassette10Count,
+                                        cassette20Count,
+                                        cassette50Count,
+                                        responseMessage)) {
+      logRuntimeLine("[REMOTE_DB] payload cassette recycler non valido", true);
+      return false;
+    }
+
+    return applyBillRecyclerManualAction(
+      cassette10Count,
+      cassette20Count,
+      cassette50Count,
+      "[REMOTE_DB] valori cassette banconote recycler aggiornati da richiesta remota",
+      "valori cassette banconote recycler salvati",
       responseMessage);
   }
 
