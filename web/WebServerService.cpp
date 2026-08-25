@@ -838,6 +838,10 @@ void WebServerService::handleSettingsPage() {
       <div class="field">
         <label class="checkbox-row"><input id="saveWifiCredentials" type="checkbox">Salva credenziali WiFi per la connessione automatica</label>
       </div>
+      <div class="btn-row" style="margin-top:8px;">
+        <button id="btnSaveNetwork" class="btn" type="button">Salva</button>
+      </div>
+      <div id="networkSaveStatus" class="status-text"></div>
     </div>
 
     <div class="card section">
@@ -855,8 +859,14 @@ void WebServerService::handleSettingsPage() {
           <button id="toggleApiKey" class="btn secondary" type="button">Mostra</button>
         </div>
       </div>
+      <div class="btn-row" style="margin-top:8px;">
+        <button id="btnSaveServer" class="btn" type="button">Salva</button>
+      </div>
+      <div id="serverSaveStatus" class="status-text"></div>
+    </div>
 
-      <h3 class="section-title" style="margin-top:16px;">MQTT (EMQX)</h3>
+    <div class="card section">
+      <h3 class="section-title">MQTT (EMQX)</h3>
       <details class="info">
         <summary>Info</summary>
         <div class="body">Abilita MQTT per ricevere comandi in push dal broker EMQX invece del polling HTTP.</div>
@@ -880,6 +890,10 @@ void WebServerService::handleSettingsPage() {
           <div class="body">Usa i valori correnti del form; se necessario tenta prima la connessione WiFi e poi il controllo dell'endpoint remoto.</div>
         </details>
       </div>
+      <div class="btn-row" style="margin-top:8px;">
+        <button id="btnSaveMqtt" class="btn" type="button">Salva</button>
+      </div>
+      <div id="mqttSaveStatus" class="status-text"></div>
     </div>
 
     <div class="card section">
@@ -951,11 +965,14 @@ void WebServerService::handleSettingsPage() {
           <div class="body">Elenco delle periferiche presenti sul bus ma non assegnate a contatori, oppure non riconosciute.</div>
         </details>
       </div>
+      <div class="btn-row" style="margin-top:8px;">
+        <button id="btnSavePeripherals" class="btn" type="button">Salva</button>
+      </div>
+      <div id="peripheralsSaveStatus" class="status-text"></div>
     </div>
 
     <div class="card">
       <div class="btn-row">
-        <button id="btnSave" class="btn" type="button">Salva</button>
         <a class="btn secondary" href="/">Menu</a>
         <a class="btn secondary" href="/status">Stato</a>
       </div>
@@ -1579,7 +1596,9 @@ void WebServerService::handleSettingsPage() {
       return params;
     }
 
-    async function saveSettings() {
+    async function saveSettings(statusElId) {
+      const targetEl = document.getElementById(statusElId || 'status');
+      if (targetEl) targetEl.textContent = 'Salvataggio in corso...';
       const params = buildSettingsParams();
       const r = await fetch('/api/settings', {
         method: 'POST',
@@ -1587,7 +1606,9 @@ void WebServerService::handleSettingsPage() {
         body: params.toString()
       });
       const data = await r.json();
-      document.getElementById('status').textContent = data.ok ? ('OK: ' + data.message) : ('Errore: ' + data.message);
+      const message = data.ok ? ('OK: ' + data.message) : ('Errore: ' + data.message);
+      if (targetEl) targetEl.textContent = message;
+      if (targetEl && targetEl.id !== 'status') document.getElementById('status').textContent = message;
     }
 
     async function testConnection() {
@@ -1622,11 +1643,17 @@ void WebServerService::handleSettingsPage() {
       await refreshWifiIndicator();
     }
 
-    document.getElementById('btnSave').addEventListener('click', () => {
-      saveSettings().catch(() => {
-        document.getElementById('status').textContent = 'Errore rete durante salvataggio';
+    function wireSectionSave(buttonId, statusElId) {
+      document.getElementById(buttonId).addEventListener('click', () => {
+        saveSettings(statusElId).catch(() => {
+          document.getElementById(statusElId).textContent = 'Errore rete durante salvataggio';
+        });
       });
-    });
+    }
+    wireSectionSave('btnSaveNetwork', 'networkSaveStatus');
+    wireSectionSave('btnSaveServer', 'serverSaveStatus');
+    wireSectionSave('btnSaveMqtt', 'mqttSaveStatus');
+    wireSectionSave('btnSavePeripherals', 'peripheralsSaveStatus');
 
     document.getElementById('btnScanWifi').addEventListener('click', () => {
       loadWifiNetworks(selectedWifiSsid()).catch(() => {
