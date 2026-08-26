@@ -70,8 +70,8 @@
 #include "mesh/EspNowMasterService.h"
 #include "web/WebServerService.h"
 
-static_assert(appconfig::TASK_PRIORITY_SNIFFER >= appconfig::TASK_PRIORITY_NET,
-              "ccTalk sniffer priority must be at least auxiliary services priority");
+static_assert(appconfig::TASK_PRIORITY_SNIFFER > appconfig::TASK_PRIORITY_NET,
+              "ccTalk sniffer priority must be strictly higher than auxiliary services priority");
 
 // Velocita della seriale usata per il log locale e per i comandi da console.
 static const uint32_t LOG_BAUD = 115200;
@@ -129,7 +129,11 @@ public:
 
   size_t write(uint8_t b) override {
 #if ENABLE_SERIAL_LOG
-    if (_serialOut) _serialOut->write(b);
+    // Scrittura best-effort: se il buffer TX USB-CDC e' pieno (host lento o
+    // monitor non collegato) scartiamo il byte invece di bloccare il chiamante.
+    // Questo stream viene alimentato anche dal task sniffer (priorita' alta),
+    // che non deve mai attendere su un write() seriale.
+    if (_serialOut && _serialOut->availableForWrite() > 0) _serialOut->write(b);
 #endif
 
     // '\r' viene ignorato per uniformare la gestione delle righe.
@@ -3716,10 +3720,10 @@ static void initCcTalkSniffer() {
 }
 
 static void serviceSnifferOnce() {
-  // Questo ciclo deve essere il piu reattivo possibile: gestisce seriale,
-  // sniffing e misura il proprio tempo di esecuzione per telemetria interna.
-  handleConsoleCommands();
-
+  // Questo ciclo deve essere il piu reattivo possibile: legge il bus ccTalk
+  // e misura il proprio tempo di esecuzione per telemetria interna. I comandi
+  // da console (interazione operatore, non time-critical) sono gestiti dal
+  // task ausiliario per non intralciare mai lo sniffing.
   const uint32_t startUs = micros();
   const uint32_t gapUs =
       (g_lastSnifferCycleStartUs == 0) ? 0 : (uint32_t)(startUs - g_lastSnifferCycleStartUs);
@@ -3733,6 +3737,7 @@ static void serviceSnifferOnce() {
 
 static void serviceAuxOnce() {
   // Task/loop dei servizi non critici per il timing del bus ccTalk.
+  handleConsoleCommands();
   pollProgrammingModeButton();
   g_wifi.loop();
   updateStatusLeds();

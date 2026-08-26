@@ -103,7 +103,7 @@ static const uint32_t NET_SERVICE_LOOP_INTERVAL_MS = 2;
 static const uint32_t PERSIST_LOOP_INTERVAL_MS = 20;
 static const uint32_t TASK_STACK_BYTES_SNIFFER = 8192;
 static const uint32_t TASK_STACK_BYTES_NET = 16384;
-static const uint8_t TASK_PRIORITY_SNIFFER = 1;
+static const uint8_t TASK_PRIORITY_SNIFFER = 2;
 static const uint8_t TASK_PRIORITY_NET = 1;
 
 // Fase 3: cloud publish + mesh locale.
