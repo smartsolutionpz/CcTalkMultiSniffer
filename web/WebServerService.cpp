@@ -1118,7 +1118,8 @@ void WebServerService::handleSettingsPage() {
           { value: 1, label: 'Hopper AlbericiDiscriminator' },
           { value: 2, label: 'Hopper Alberici HopperCD' },
           { value: 3, label: 'Hopper Suzo Evolution' },
-          { value: 4, label: 'Hopper Azkoyen Discriminator' }
+          { value: 4, label: 'Hopper Azkoyen Discriminator' },
+          { value: 5, label: 'Hopper Alberici Evolution' }
         ];
       }
       if (device.family === 'bill_validator') {
@@ -1543,6 +1544,7 @@ void WebServerService::handleSettingsPage() {
       const hopperModel2Mask = buildModelMask('hopper', 2, 3);
       const hopperModel3Mask = buildModelMask('hopper', 3, 3);
       const hopperModel4Mask = buildModelMask('hopper', 4, 3);
+      const hopperModel5Mask = buildModelMask('hopper', 5, 3);
       const billValidatorModel1Mask = buildModelMask('bill_validator', 1, 40);
       const billValidatorModel2Mask = buildModelMask('bill_validator', 2, 40);
       const billValidatorModel3Mask = buildModelMask('bill_validator', 3, 40);
@@ -1563,15 +1565,18 @@ void WebServerService::handleSettingsPage() {
       params.set('hopperAlbericiHopperCdMask', hopperModel2Mask);
       params.set('hopperSuzoEvolutionMask', hopperModel3Mask);
       params.set('hopperAzkoyenDiscriminatorMask', hopperModel4Mask);
+      params.set('hopperAlbericiEvolutionMask', hopperModel5Mask);
       params.set('billValidatorMd100Mask', billValidatorModel1Mask);
       params.set('billValidatorSmartPayoutMask', billValidatorModel2Mask);
       params.set('billValidatorIproMask', billValidatorModel3Mask);
       params.set('hopperModel',
-        hopperModel4Mask !== '0' && hopperModel1Mask === '0' && hopperModel2Mask === '0' && hopperModel3Mask === '0'
+        hopperModel4Mask !== '0' && hopperModel1Mask === '0' && hopperModel2Mask === '0' && hopperModel3Mask === '0' && hopperModel5Mask === '0'
           ? '4'
-          : (hopperModel3Mask !== '0' && hopperModel1Mask === '0' && hopperModel2Mask === '0'
-            ? '3'
-            : (hopperModel2Mask !== '0' && hopperModel1Mask === '0' ? '2' : '1')));
+          : (hopperModel5Mask !== '0' && hopperModel1Mask === '0' && hopperModel2Mask === '0' && hopperModel3Mask === '0'
+            ? '5'
+            : (hopperModel3Mask !== '0' && hopperModel1Mask === '0' && hopperModel2Mask === '0'
+              ? '3'
+              : (hopperModel2Mask !== '0' && hopperModel1Mask === '0' ? '2' : '1'))));
       params.set('billValidatorModel',
         billValidatorModel3Mask !== '0' && billValidatorModel1Mask === '0' && billValidatorModel2Mask === '0'
           ? '3'
@@ -2270,7 +2275,8 @@ bool WebServerService::parseSettingsFromRequest(AppSettings& out, String& messag
   if (hopperModel != (long)HOPPER_MODEL_ALBERICI_DISCRIMINATOR &&
       hopperModel != (long)HOPPER_MODEL_ALBERICI_HOPPERCD &&
       hopperModel != (long)HOPPER_MODEL_SUZO_EVOLUTION &&
-      hopperModel != (long)HOPPER_MODEL_AZKOYEN_DISCRIMINATOR) {
+      hopperModel != (long)HOPPER_MODEL_AZKOYEN_DISCRIMINATOR &&
+      hopperModel != (long)HOPPER_MODEL_ALBERICI_EVOLUTION) {
     message = "hopperModel non valido";
     return false;
   }
@@ -2322,6 +2328,16 @@ bool WebServerService::parseSettingsFromRequest(AppSettings& out, String& messag
     if (!parseUnsignedLongStrict(_server.arg("hopperAzkoyenDiscriminatorMask"), hopperAzkoyenDiscriminatorMask) ||
         hopperAzkoyenDiscriminatorMask > 0xFFUL) {
       message = "hopperAzkoyenDiscriminatorMask non valido";
+      return false;
+    }
+  }
+
+  unsigned long hopperAlbericiEvolutionMask =
+      (hopperModel == (long)HOPPER_MODEL_ALBERICI_EVOLUTION) ? (unsigned long)kAllHopperMask : 0UL;
+  if (_server.hasArg("hopperAlbericiEvolutionMask")) {
+    if (!parseUnsignedLongStrict(_server.arg("hopperAlbericiEvolutionMask"), hopperAlbericiEvolutionMask) ||
+        hopperAlbericiEvolutionMask > 0xFFUL) {
+      message = "hopperAlbericiEvolutionMask non valido";
       return false;
     }
   }
@@ -2418,6 +2434,8 @@ bool WebServerService::parseSettingsFromRequest(AppSettings& out, String& messag
       sanitizeHopperModelAssignmentMask((uint8_t)hopperSuzoEvolutionMask);
   out.hopperAzkoyenDiscriminatorMask =
       sanitizeHopperModelAssignmentMask((uint8_t)hopperAzkoyenDiscriminatorMask);
+  out.hopperAlbericiEvolutionMask =
+      sanitizeHopperModelAssignmentMask((uint8_t)hopperAlbericiEvolutionMask);
   out.billValidatorMd100Mask =
       sanitizeBillValidatorModelAssignmentMask((uint16_t)billValidatorMd100Mask);
   out.billValidatorSmartPayoutMask =

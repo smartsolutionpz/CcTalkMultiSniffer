@@ -73,7 +73,8 @@ bool AppSettingsStore::load(AppSettings& out) {
   out.billValidatorModel =
       sanitizeBillValidatorModel(prefs.getUChar("bv_model", BILL_VALIDATOR_MODEL_MD100));
   const bool hasHopperModelMasks =
-      prefs.isKey("hop_m1") || prefs.isKey("hop_m2") || prefs.isKey("hop_m3") || prefs.isKey("hop_m4");
+      prefs.isKey("hop_m1") || prefs.isKey("hop_m2") || prefs.isKey("hop_m3") || prefs.isKey("hop_m4") ||
+      prefs.isKey("hop_m5");
   const bool hasBillValidatorModelMasks =
       prefs.isKey("bv_m1") || prefs.isKey("bv_m2") || prefs.isKey("bv_m3");
   out.hopperAlbericiDiscriminatorMask =
@@ -84,6 +85,8 @@ bool AppSettingsStore::load(AppSettings& out) {
       sanitizeHopperModelAssignmentMask(prefs.getUChar("hop_m3", 0));
   out.hopperAzkoyenDiscriminatorMask =
       sanitizeHopperModelAssignmentMask(prefs.getUChar("hop_m4", 0));
+  out.hopperAlbericiEvolutionMask =
+      sanitizeHopperModelAssignmentMask(prefs.getUChar("hop_m5", 0));
   out.billValidatorMd100Mask =
       sanitizeBillValidatorModelAssignmentMask(prefs.getUShort("bv_m1", 0));
   out.billValidatorSmartPayoutMask =
@@ -118,6 +121,8 @@ bool AppSettingsStore::load(AppSettings& out) {
         (out.hopperModel == HOPPER_MODEL_SUZO_EVOLUTION) ? kAllHopperMask : 0;
     out.hopperAzkoyenDiscriminatorMask =
         (out.hopperModel == HOPPER_MODEL_AZKOYEN_DISCRIMINATOR) ? kAllHopperMask : 0;
+    out.hopperAlbericiEvolutionMask =
+        (out.hopperModel == HOPPER_MODEL_ALBERICI_EVOLUTION) ? kAllHopperMask : 0;
   }
   if (!hasBillValidatorModelMasks) {
     out.billValidatorMd100Mask =
@@ -171,6 +176,8 @@ bool AppSettingsStore::save(const AppSettings& in) {
        prefs.putUChar("hop_m3", sanitizeHopperModelAssignmentMask(in.hopperSuzoEvolutionMask)) > 0;
   ok = ok &&
        prefs.putUChar("hop_m4", sanitizeHopperModelAssignmentMask(in.hopperAzkoyenDiscriminatorMask)) > 0;
+  ok = ok &&
+       prefs.putUChar("hop_m5", sanitizeHopperModelAssignmentMask(in.hopperAlbericiEvolutionMask)) > 0;
   ok = ok &&
        prefs.putUShort("bv_m1", sanitizeBillValidatorModelAssignmentMask(in.billValidatorMd100Mask)) > 0;
   ok = ok &&

@@ -13,6 +13,11 @@ const HopperDataset kAlbericiHopperCdDataset(
     HOPPER_CUSTOM_COMMANDS_NONE,
     true);
 
+const HopperDataset kAlbericiEvolutionDataset(
+    "ALBERICI_EVOLUTION",
+    HOPPER_CUSTOM_COMMANDS_NONE,
+    false);
+
 const HopperDataset kSuzoEvolutionDataset(
     "SUZO_EVOLUTION",
     HOPPER_CUSTOM_COMMANDS_NONE,
@@ -34,6 +39,10 @@ const HopperDataset& hopperDatasetAlbericiDiscriminator() {
 
 const HopperDataset& hopperDatasetAlbericiHopperCd() {
   return kAlbericiHopperCdDataset;
+}
+
+const HopperDataset& hopperDatasetAlbericiEvolution() {
+  return kAlbericiEvolutionDataset;
 }
 
 const HopperDataset& hopperDatasetSuzoEvolution() {

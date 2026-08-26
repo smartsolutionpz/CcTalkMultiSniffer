@@ -54,6 +54,7 @@
 #include "CcTalkCoinAcceptorNriFalcon.h"
 #include "CcTalkHopperAlbericiDiscriminator.h"
 #include "CcTalkHopperAlbericiHopperCd.h"
+#include "CcTalkHopperAlbericiEvolution.h"
 #include "CcTalkHopperAzkoyenDiscriminator.h"
 #include "CcTalkHopperSuzoEvolution.h"
 #include "CcTalkBillValidatorIPRO.h"
@@ -292,6 +293,7 @@ static portMUX_TYPE g_framDirtyMux = portMUX_INITIALIZER_UNLOCKED;
 CcTalkCoinAcceptorNriFalcon g_coin;
 CcTalkHopperAlbericiDiscriminator g_hopperAlbericiDiscriminator;
 CcTalkHopperAlbericiHopperCd g_hopperAlbericiHopperCd;
+CcTalkHopperAlbericiEvolution g_hopperAlbericiEvolution;
 CcTalkHopperAzkoyenDiscriminator g_hopperAzkoyenDiscriminator;
 CcTalkHopperSuzoEvolution g_hopperSuzoEvolution;
 CcTalkBillValidatorIPRO g_billValidatorIpro;
@@ -922,6 +924,8 @@ static const char* hopperModelLabel(uint8_t model) {
       return "AlbericiDiscriminator";
     case ccms::HOPPER_MODEL_ALBERICI_HOPPERCD:
       return "AlbericiHopperCD";
+    case ccms::HOPPER_MODEL_ALBERICI_EVOLUTION:
+      return "AlbericiEvolution";
     case ccms::HOPPER_MODEL_AZKOYEN_DISCRIMINATOR:
       return "AzkoyenDiscriminator";
     case ccms::HOPPER_MODEL_SUZO_EVOLUTION:
@@ -952,6 +956,9 @@ static uint8_t configuredHopperModelForAddress(const ccms::AppSettings& settings
   }
   if ((settings.hopperAlbericiHopperCdMask & bit) != 0) {
     return ccms::HOPPER_MODEL_ALBERICI_HOPPERCD;
+  }
+  if ((settings.hopperAlbericiEvolutionMask & bit) != 0) {
+    return ccms::HOPPER_MODEL_ALBERICI_EVOLUTION;
   }
   if ((settings.hopperAzkoyenDiscriminatorMask & bit) != 0) {
     return ccms::HOPPER_MODEL_AZKOYEN_DISCRIMINATOR;
@@ -985,6 +992,8 @@ static CcTalkHopper* hopperParserForAddress(uint8_t addr) {
       return &g_hopperSuzoEvolution;
     case ccms::HOPPER_MODEL_ALBERICI_HOPPERCD:
       return &g_hopperAlbericiHopperCd;
+    case ccms::HOPPER_MODEL_ALBERICI_EVOLUTION:
+      return &g_hopperAlbericiEvolution;
     case ccms::HOPPER_MODEL_ALBERICI_DISCRIMINATOR:
       return &g_hopperAlbericiDiscriminator;
     default:
@@ -1026,6 +1035,8 @@ static void normalizeDeviceModelSettings(ccms::AppSettings& settings) {
       ccms::sanitizeHopperModelAssignmentMask(settings.hopperAzkoyenDiscriminatorMask);
   settings.hopperSuzoEvolutionMask =
       ccms::sanitizeHopperModelAssignmentMask(settings.hopperSuzoEvolutionMask);
+  settings.hopperAlbericiEvolutionMask =
+      ccms::sanitizeHopperModelAssignmentMask(settings.hopperAlbericiEvolutionMask);
   settings.billValidatorMd100Mask =
       ccms::sanitizeBillValidatorModelAssignmentMask(settings.billValidatorMd100Mask);
   settings.billValidatorSmartPayoutMask =
@@ -1046,6 +1057,9 @@ static void normalizeDeviceModelSettings(ccms::AppSettings& settings) {
   settings.hopperSuzoEvolutionMask =
       (uint8_t)(settings.hopperSuzoEvolutionMask & (uint8_t)~assignedHopperMask);
   assignedHopperMask |= settings.hopperSuzoEvolutionMask;
+  settings.hopperAlbericiEvolutionMask =
+      (uint8_t)(settings.hopperAlbericiEvolutionMask & (uint8_t)~assignedHopperMask);
+  assignedHopperMask |= settings.hopperAlbericiEvolutionMask;
 
   const uint16_t billValidatorOverlap =
       (uint16_t)(settings.billValidatorMd100Mask & settings.billValidatorSmartPayoutMask);
@@ -1069,13 +1083,20 @@ static void normalizeDeviceModelSettings(ccms::AppSettings& settings) {
   if (settings.hopperAzkoyenDiscriminatorMask != 0 &&
       settings.hopperAlbericiDiscriminatorMask == 0 &&
       settings.hopperAlbericiHopperCdMask == 0 &&
+      settings.hopperAlbericiEvolutionMask == 0 &&
       settings.hopperSuzoEvolutionMask == 0) {
     settings.hopperModel = ccms::HOPPER_MODEL_AZKOYEN_DISCRIMINATOR;
   } else if (settings.hopperSuzoEvolutionMask != 0 &&
       settings.hopperAlbericiDiscriminatorMask == 0 &&
       settings.hopperAlbericiHopperCdMask == 0 &&
+      settings.hopperAlbericiEvolutionMask == 0 &&
       settings.hopperAzkoyenDiscriminatorMask == 0) {
     settings.hopperModel = ccms::HOPPER_MODEL_SUZO_EVOLUTION;
+  } else if (settings.hopperAlbericiEvolutionMask != 0 &&
+      settings.hopperAlbericiDiscriminatorMask == 0 &&
+      settings.hopperAlbericiHopperCdMask == 0 &&
+      settings.hopperAzkoyenDiscriminatorMask == 0) {
+    settings.hopperModel = ccms::HOPPER_MODEL_ALBERICI_EVOLUTION;
   } else if (settings.hopperAlbericiHopperCdMask != 0 &&
              settings.hopperAlbericiDiscriminatorMask == 0 &&
              settings.hopperAzkoyenDiscriminatorMask == 0) {
@@ -1104,6 +1125,7 @@ static void selectDeviceModelsFromSettings() {
   applyConfiguredHopperCoinValues(g_runtimeDeviceSettings);
   g_hopperAlbericiDiscriminator.setAddressMask(g_runtimeDeviceSettings.hopperAlbericiDiscriminatorMask);
   g_hopperAlbericiHopperCd.setAddressMask(g_runtimeDeviceSettings.hopperAlbericiHopperCdMask);
+  g_hopperAlbericiEvolution.setAddressMask(g_runtimeDeviceSettings.hopperAlbericiEvolutionMask);
   g_hopperAzkoyenDiscriminator.setAddressMask(g_runtimeDeviceSettings.hopperAzkoyenDiscriminatorMask);
   g_hopperSuzoEvolution.setAddressMask(g_runtimeDeviceSettings.hopperSuzoEvolutionMask);
   g_billValidatorIpro.setAddressMask(g_runtimeDeviceSettings.billValidatorIproMask);
@@ -1121,6 +1143,7 @@ static void applyConfiguredHopperCoinValues(const ccms::AppSettings& settings) {
         (idx < ccms::kHopperAddressCount) ? settings.hopperCoinValueCents[idx] : 0;
     g_hopperAlbericiDiscriminator.setConfiguredCoinValueCents(addr, valueCents);
     g_hopperAlbericiHopperCd.setConfiguredCoinValueCents(addr, valueCents);
+    g_hopperAlbericiEvolution.setConfiguredCoinValueCents(addr, valueCents);
     g_hopperAzkoyenDiscriminator.setConfiguredCoinValueCents(addr, valueCents);
     g_hopperSuzoEvolution.setConfiguredCoinValueCents(addr, valueCents);
   }
@@ -1145,6 +1168,7 @@ static void normalizeCounterRoutingSettings(ccms::AppSettings& settings) {
   const uint8_t configuredHopperMask =
       (uint8_t)(settings.hopperAlbericiDiscriminatorMask |
                 settings.hopperAlbericiHopperCdMask |
+                settings.hopperAlbericiEvolutionMask |
                 settings.hopperAzkoyenDiscriminatorMask |
                 settings.hopperSuzoEvolutionMask);
   const uint16_t configuredBillValidatorMask =
@@ -1295,6 +1319,7 @@ static bool onWebSaveSettings(const ccms::AppSettings& in, String& message, void
   const bool modelChanged =
       (next.hopperAlbericiDiscriminatorMask != g_appSettings.hopperAlbericiDiscriminatorMask) ||
       (next.hopperAlbericiHopperCdMask != g_appSettings.hopperAlbericiHopperCdMask) ||
+      (next.hopperAlbericiEvolutionMask != g_appSettings.hopperAlbericiEvolutionMask) ||
       (next.hopperAzkoyenDiscriminatorMask != g_appSettings.hopperAzkoyenDiscriminatorMask) ||
       (next.hopperSuzoEvolutionMask != g_appSettings.hopperSuzoEvolutionMask) ||
       (next.billValidatorMd100Mask != g_appSettings.billValidatorMd100Mask) ||

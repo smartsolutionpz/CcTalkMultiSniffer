@@ -50,5 +50,6 @@ struct HopperDataset {
 
 const HopperDataset& hopperDatasetAlbericiDiscriminator();
 const HopperDataset& hopperDatasetAlbericiHopperCd();
+const HopperDataset& hopperDatasetAlbericiEvolution();
 const HopperDataset& hopperDatasetSuzoEvolution();
 const HopperDataset& hopperDatasetAzkoyenDiscriminator();
