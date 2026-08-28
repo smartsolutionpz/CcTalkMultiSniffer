@@ -1211,14 +1211,14 @@ void WebServerService::handleSettingsPage() {
         meta.appendChild(title);
         const note = document.createElement('div');
         note.className = 'device-note';
-        note.textContent = 'Taglio moneta usato dal contatore su comandi A7/A6';
+        note.textContent = 'Discriminatore: segue il percorso sorter letto dal bus (0xD2) prima di ogni conteggio (mappatura posizioni nota per Alberici Evolution: 2.00/1.00/0.50 EUR). Per hopper mono-moneta seleziona 1.00 o 2.00 EUR';
         meta.appendChild(note);
         row.appendChild(meta);
 
         const select = document.createElement('select');
         select.dataset.hopperCoinValueAddr = String(addr);
         const options = [
-          { value: 0, label: 'Non impostato' },
+          { value: 0, label: 'Discriminatore' },
           { value: 100, label: '1.00 EUR' },
           { value: 200, label: '2.00 EUR' }
         ];

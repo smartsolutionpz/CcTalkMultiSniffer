@@ -22,6 +22,13 @@ struct HopperDataset {
   uint16_t defaultBaseCoinValueCents;
   uint16_t defaultType1ValueUnits;
   uint16_t defaultType2ValueUnits;
+  // Tabella statica posizione(1..16, indicizzata 0-based)->valore in cent,
+  // nota a priori per il modello. Serve a correlare il percorso sorter
+  // (0xD2, per posizione) al taglio moneta sui modelli il cui host non
+  // interroga mai la coin table via 0x83 sul bus (es. Alberici Evolution).
+  // nullptr = nessuna tabella nota: si usa solo cio' che viene osservato
+  // via 0x83 sul bus.
+  const uint16_t* defaultCoinPositionValueCents;
 
   HopperDataset()
     : modelName("GENERIC_HOPPER"),
@@ -30,7 +37,8 @@ struct HopperDataset {
       monoCoin(false),
       defaultBaseCoinValueCents(0),
       defaultType1ValueUnits(0),
-      defaultType2ValueUnits(0) {}
+      defaultType2ValueUnits(0),
+      defaultCoinPositionValueCents(nullptr) {}
 
   HopperDataset(const char* name,
                 HopperCustomCommandMode mode,
@@ -38,14 +46,16 @@ struct HopperDataset {
                 uint16_t baseCoinValueCents = 0,
                 uint16_t type1ValueUnits = 0,
                 uint16_t type2ValueUnits = 0,
-                HopperStatusMode hopperStatusMode = HOPPER_STATUS_MODE_STANDARD)
+                HopperStatusMode hopperStatusMode = HOPPER_STATUS_MODE_STANDARD,
+                const uint16_t* coinPositionValueCents = nullptr)
     : modelName(name),
       customCommandMode(mode),
       statusMode(hopperStatusMode),
       monoCoin(isMonoCoin),
       defaultBaseCoinValueCents(baseCoinValueCents),
       defaultType1ValueUnits(type1ValueUnits),
-      defaultType2ValueUnits(type2ValueUnits) {}
+      defaultType2ValueUnits(type2ValueUnits),
+      defaultCoinPositionValueCents(coinPositionValueCents) {}
 };
 
 const HopperDataset& hopperDatasetAlbericiDiscriminator();

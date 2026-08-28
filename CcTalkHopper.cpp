@@ -54,6 +54,19 @@ void CcTalkHopper::resetState() {
   memset(_states, 0, sizeof(_states));
   for (uint8_t i = 0; i < kStateCount; i++) {
     _states[i].addr = (uint8_t)(kAddrMin + i);
+    // Pre-popola la coin table con la mappatura posizione->taglio nota di
+    // fabbrica per il modello (se presente), cosi la correlazione col
+    // percorso sorter (0xD2) funziona anche se il master non interroga mai
+    // 0x83 sul bus. Se il master la interroga davvero, la risposta osservata
+    // sovrascrive comunque questo valore di default (vedi case 0x83).
+    if (_dataset.defaultCoinPositionValueCents) {
+      for (uint8_t pos = 0; pos < 16; pos++) {
+        const uint16_t value = _dataset.defaultCoinPositionValueCents[pos];
+        if (value == 0) continue;
+        _states[i].coinValues[pos].value = value;
+        _states[i].coinValues[pos].valid = true;
+      }
+    }
   }
 }
 
@@ -120,6 +133,16 @@ void CcTalkHopper::updateState(const CcTalkTransaction& t) {
       state->azkoyenRequestBaseUnits = 0;
       state->pollSnapshotValid = false;
       state->lastDispenseStepValid = false;
+      state->lastExcludedStepValid = false;
+      // Il reset riporta tutti i percorsi sorter al default di fabbrica (path 1).
+      memset(state->coinSorterPath, 0, sizeof(state->coinSorterPath));
+      return;
+
+    case 0xD2:
+      // Osservato solo se confermato ACK (vedi filtro resp.hdr!=0x00 sopra).
+      if (req.dataLen == 2 && req.data[0] >= 1 && req.data[0] <= 16) {
+        state->coinSorterPath[(uint8_t)(req.data[0] - 1)] = req.data[1];
+      }
       return;
 
     case 0x10:
@@ -381,13 +404,25 @@ void CcTalkHopper::dumpState(Stream& out) const {
     out.print(F(" ("));
     printValueAsEuro(out, s.dispensedTotalValue);
     out.println(F(")"));
+    if (s.excludedTotalValue > 0) {
+      out.print(F("    excludedTotal="));
+      out.print(s.excludedTotalValue);
+      out.print(F(" ("));
+      printValueAsEuro(out, s.excludedTotalValue);
+      out.println(F(")"));
+    }
     const uint16_t configuredCoinValue = configuredCoinValueCents(s.addr);
     if (configuredCoinValue > 0) {
       out.print(F("    configuredCoinValue="));
       out.print(configuredCoinValue);
-      out.print(F(" ("));
-      printValueAsEuro(out, configuredCoinValue);
-      out.println(F(")"));
+      if (configuredCoinValue == kCoinFilterComboOneTwoEuro) {
+        out.print(F(" (filtro: 1e o 2e)"));
+      } else {
+        out.print(F(" ("));
+        printValueAsEuro(out, configuredCoinValue);
+        out.print(')');
+      }
+      out.println();
     }
     if (s.lastDispenseStepValid) {
       out.print(F("    lastDispenseStep="));
@@ -509,7 +544,13 @@ void CcTalkHopper::dumpState(Stream& out) const {
       out.print(F("] id=\""));
       out.print(coin.coin);
       out.print(F("\" value="));
-      out.println(coin.value);
+      out.print(coin.value);
+      if (s.coinSorterPath[coinIdx] != 0) {
+        out.print(F(" sortPath="));
+        out.print(s.coinSorterPath[coinIdx]);
+        out.print(s.coinSorterPath[coinIdx] == 1 ? F(" (accettata)") : F(" (esclusa)"));
+      }
+      out.println();
     }
   }
 }
@@ -662,6 +703,19 @@ void CcTalkHopper::printRequestPayload(Stream& out, const CcTalkFrame& req) {
       if (req.dataLen == 1) {
         out.print(F("  payload: counterIndex="));
         out.println(req.data[0]);
+      } else if (req.dataLen) {
+        out.print(F("  payload raw: "));
+        dumpHex(out, req.data, req.dataLen);
+        out.println();
+      }
+      return;
+
+    case 0xD2:
+      if (req.dataLen == 2) {
+        out.print(F("  payload: coinPos="));
+        out.print(req.data[0]);
+        out.print(F(" sortPath="));
+        out.println(req.data[1]);
       } else if (req.dataLen) {
         out.print(F("  payload raw: "));
         dumpHex(out, req.data, req.dataLen);
@@ -917,7 +971,8 @@ uint16_t CcTalkHopper::configuredCoinValueCents(uint8_t addr) const {
 
 uint16_t CcTalkHopper::azkoyenBaseCoinValueCents(const HopperState& state) const {
   const uint16_t configured = configuredCoinValueCents(state.addr);
-  if (configured > 0) return configured;
+  // Il codice "combo 1e/2e" non e un valore moneta singolo utilizzabile qui.
+  if (configured > 0 && configured != kCoinFilterComboOneTwoEuro) return configured;
   return _dataset.defaultBaseCoinValueCents;
 }
 
@@ -954,13 +1009,60 @@ uint16_t CcTalkHopper::azkoyenType2ValueUnits(const HopperState& state) const {
 
 uint16_t CcTalkHopper::knownCoinValue(const HopperState& state) const {
   const uint16_t configuredValue = configuredCoinValueCents(state.addr);
-  if (configuredValue > 0) return configuredValue;
+  // Il codice "combo 1e/2e" non e un valore moneta singolo utilizzabile qui:
+  // in quel caso si ricade sulla coin table come se non fosse configurato.
+  if (configuredValue > 0 && configuredValue != kCoinFilterComboOneTwoEuro) return configuredValue;
   for (uint8_t i = 0; i < 16; i++) {
     if (!state.coinValues[i].valid) continue;
     if (state.coinValues[i].value == 0) continue;
     return state.coinValues[i].value;
   }
   return 0;
+}
+
+int8_t CcTalkHopper::findCoinPositionByValue(const HopperState& state, uint16_t valueCents) const {
+  // Trova la posizione (0-based) della coin table (0x83) il cui valore
+  // corrisponde esattamente al delta osservato, per poterne risalire al
+  // percorso sorter attualmente impostato (0xD2).
+  if (valueCents == 0) return -1;
+  for (uint8_t i = 0; i < 16; i++) {
+    if (state.coinValues[i].valid && state.coinValues[i].value == valueCents) return (int8_t)i;
+  }
+  return -1;
+}
+
+bool CcTalkHopper::coinValueAccepted(const HopperState& state, uint16_t valueCents,
+                                     CoinFilterReason& reason) const {
+  const uint16_t configured = configuredCoinValueCents(state.addr);
+
+  // Filtro statico esplicito ("1e" / "2e" / combo legacy): usato per hopper
+  // mono-moneta senza sorter, non dipende dal segnale live 0xD2.
+  if (configured == kCoinFilterComboOneTwoEuro) {
+    const bool accepted = (valueCents == 100 || valueCents == 200);
+    reason = accepted ? COIN_FILTER_REASON_NONE : COIN_FILTER_REASON_MANUAL_FILTER;
+    return accepted;
+  }
+  if (configured != 0) {
+    const bool accepted = (valueCents == configured);
+    reason = accepted ? COIN_FILTER_REASON_NONE : COIN_FILTER_REASON_MANUAL_FILTER;
+    return accepted;
+  }
+
+  // "Discriminatore" (default, configured == 0): il totale segue il
+  // percorso sorter osservato dal vivo (0xD2, confermato ACK, correlato al
+  // taglio tramite la coin table) PER QUESTO SPECIFICO INDIRIZZO. Per spec
+  // ccTalk il default di fabbrica/dopo reset di ogni posizione e gia path 1
+  // ("accettata") finche il master non lo cambia esplicitamente; quindi
+  // l'assenza di un 0xD2 osservato per questa posizione/indirizzo (tipico
+  // di un hopper usato solo per l'erogazione, senza sorter in gioco) non
+  // deve escludere la moneta: va trattata come accettata, come da default
+  // di protocollo. Si esclude SOLO quando e stato osservato esplicitamente
+  // un percorso diverso da 1 per quel taglio su questo stesso indirizzo.
+  const int8_t pos = findCoinPositionByValue(state, valueCents);
+  const uint8_t path = (pos >= 0) ? state.coinSorterPath[pos] : 0;
+  const bool accepted = (path == 0 || path == 1);
+  reason = accepted ? COIN_FILTER_REASON_NONE : COIN_FILTER_REASON_SORTER;
+  return accepted;
 }
 
 bool CcTalkHopper::azkoyenHasValueConfig(const HopperState& state) const {
@@ -1094,6 +1196,7 @@ void CcTalkHopper::updateDispensedFromPoll(HopperState& state,
     state.lastUnpaidValue = unpaid;
     state.pollSnapshotValid = true;
     state.lastDispenseStepValid = false;
+    state.lastExcludedStepValid = false;
     return;
   }
 
@@ -1103,6 +1206,7 @@ void CcTalkHopper::updateDispensedFromPoll(HopperState& state,
     state.lastPaidValue = paid;
     state.lastUnpaidValue = unpaid;
     state.lastDispenseStepValid = false;
+    state.lastExcludedStepValid = false;
     return;
   }
 
@@ -1119,11 +1223,25 @@ void CcTalkHopper::updateDispensedFromPoll(HopperState& state,
   }
 
   if (deltaDispensed > 0) {
-    state.dispensedTotalValue += deltaDispensed;
-    state.lastDispenseStepValue = deltaDispensed;
-    state.lastDispenseStepValid = true;
+    CoinFilterReason reason = COIN_FILTER_REASON_NONE;
+    if (coinValueAccepted(state, deltaDispensed, reason)) {
+      state.dispensedTotalValue += deltaDispensed;
+      state.lastDispenseStepValue = deltaDispensed;
+      state.lastDispenseStepValid = true;
+      state.lastExcludedStepValid = false;
+    } else {
+      // Taglio riconosciuto ma non contato: scartato dal sorter, escluso dal
+      // filtro manuale, o (in modalita "Discriminatore") senza corrispondenza
+      // sorter/coin table nota. Vedi `reason` per il motivo esatto.
+      state.excludedTotalValue += deltaDispensed;
+      state.lastExcludedStepValue = deltaDispensed;
+      state.lastExcludedStepValid = true;
+      state.lastExclusionReason = reason;
+      state.lastDispenseStepValid = false;
+    }
   } else {
     state.lastDispenseStepValid = false;
+    state.lastExcludedStepValid = false;
   }
 
   state.lastRemainingValue = remaining;
@@ -1527,11 +1645,36 @@ void CcTalkHopper::printResponse(Stream& out, uint8_t hostHdr, const CcTalkFrame
             printValueAsEuro(out, state->lastDispenseStepValue);
             out.println(F(")"));
           }
+          if (state->lastExcludedStepValid) {
+            out.print(F("  [MEM] ESCLUSA step="));
+            out.print(state->lastExcludedStepValue);
+            out.print(F(" ("));
+            printValueAsEuro(out, state->lastExcludedStepValue);
+            out.print(F(") motivo="));
+            switch (state->lastExclusionReason) {
+              case COIN_FILTER_REASON_SORTER:
+                out.println(F("sorter (0xD2: percorso <> 1)"));
+                break;
+              case COIN_FILTER_REASON_MANUAL_FILTER:
+                out.println(F("filtro monete configurato"));
+                break;
+              default:
+                out.println(F("n/a"));
+                break;
+            }
+          }
           out.print(F("  [MEM] erogatoTotale="));
           out.print(state->dispensedTotalValue);
           out.print(F(" ("));
           printValueAsEuro(out, state->dispensedTotalValue);
           out.println(F(")"));
+          if (state->excludedTotalValue > 0) {
+            out.print(F("  [MEM] esclusoTotale="));
+            out.print(state->excludedTotalValue);
+            out.print(F(" ("));
+            printValueAsEuro(out, state->excludedTotalValue);
+            out.println(F(")"));
+          }
         }
       } else { out.print(F("AB raw: ")); dumpHex(out, resp.data, resp.dataLen); out.println(); }
       return;

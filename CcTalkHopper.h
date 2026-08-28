@@ -11,6 +11,14 @@
 // dei dati di payout/polling da cui si ricavano i totalizzatori monete.
 class CcTalkHopper : public CcTalkDevice {
 public:
+  // Motivo per cui un delta rilevato dal polling 0x85/0xAB non e stato
+  // incluso nel totale monete "accettato" (vedi coinValueAccepted).
+  enum CoinFilterReason : uint8_t {
+    COIN_FILTER_REASON_NONE = 0,             // accettata, nessuna esclusione
+    COIN_FILTER_REASON_SORTER = 1,           // percorso sorter (0xD2) <> 1, osservato su questo indirizzo
+    COIN_FILTER_REASON_MANUAL_FILTER = 2     // taglio non nel filtro manuale (1e/2e)
+  };
+
   // Associazione tra indice coin table e valore monetario dichiarato dal device.
   struct CoinValueState {
     bool valid = false;
@@ -102,8 +110,22 @@ public:
     bool lastDispenseStepValid = false;
     uint16_t lastDispenseStepValue = 0;
 
+    // Valore riconosciuto dal polling ma escluso dal totale perche il taglio
+    // risulta scartato dal sorter (percorso <> 1 osservato via 0xD2) oppure,
+    // in assenza di quell'informazione, non rientra nel filtro monete
+    // configurato manualmente dall'utente per l'indirizzo (vedi
+    // CcTalkHopper::coinValueAccepted / setConfiguredCoinValueCents).
+    uint32_t excludedTotalValue = 0;
+    bool lastExcludedStepValid = false;
+    uint16_t lastExcludedStepValue = 0;
+    CoinFilterReason lastExclusionReason = COIN_FILTER_REASON_NONE;
+
     uint16_t resetCount = 0;
     CoinValueState coinValues[16];
+    // Percorso sorter corrente per posizione moneta (1-based nel protocollo,
+    // indicizzato qui 0-based), osservato dai comandi 0xD2 confermati con
+    // ACK. 0 = mai osservato = default di fabbrica (path 1, "accettata").
+    uint8_t coinSorterPath[16] = {0};
   };
 
   explicit CcTalkHopper(const HopperDataset& dataset = hopperDatasetAlbericiDiscriminator());
@@ -115,6 +137,23 @@ public:
   const HopperState* stateFor(uint8_t addr) const;
   void dumpState(Stream& out) const;
   void setAddressMask(uint8_t mask);
+  // Taglio/i moneta accettati per l'indirizzo, configurabile dall'utente
+  // (pagina impostazioni):
+  // - 0 = "Discriminatore" (default): nessun filtro statico, il totale
+  //   monete segue il percorso sorter osservato sul bus per QUESTO
+  //   indirizzo (0xD2, confermato ACK, correlato alla coin table). Un
+  //   taglio viene ESCLUSO solo se e stato osservato esplicitamente un
+  //   percorso diverso da 1 ("accettata") per quella posizione su questo
+  //   stesso indirizzo. In assenza di segnale live (nessun 0xD2 mai
+  //   ricevuto per questo indirizzo/posizione, es. hopper usato solo per
+  //   erogazione senza sorter) la moneta viene comunque contata: per spec
+  //   ccTalk il default di fabbrica/dopo reset di ogni posizione e gia
+  //   path 1, quindi "nessun segnale" equivale ad "accettata".
+  // - 100/200 = solo quel taglio, filtro statico diretto (usato anche per il
+  //   conteggio A7/A6 e per il valore base Azkoyen sugli hopper mono-moneta
+  //   senza sorter, dove il segnale live 0xD2 non esiste).
+  // - kCoinFilterComboOneTwoEuro (300, non piu selezionabile da UI ma ancora
+  //   supportato per retrocompatibilita) = solo 1e o 2e, filtro statico.
   void setConfiguredCoinValueCents(uint8_t addr, uint16_t valueCents);
   uint8_t addressMask() const { return _addressMask; }
 
@@ -122,6 +161,10 @@ private:
   static const uint8_t kAddrMin = 3;
   static const uint8_t kAddrMax = 10;
   static const uint8_t kStateCount = (kAddrMax - kAddrMin + 1);
+  // Sentinella per il filtro monete configurabile: nessun taglio reale puo
+  // valere 300 centesimi in questo contesto, quindi e sicuro riservarla come
+  // codice per "accetta solo 1e o 2e" (vedi setConfiguredCoinValueCents).
+  static const uint16_t kCoinFilterComboOneTwoEuro = 300;
 
   const HopperDataset& _dataset;
   HopperState _states[kStateCount];
@@ -172,6 +215,8 @@ private:
   void printValueAsEuro(Stream& out, uint32_t units) const;
   uint16_t configuredCoinValueCents(uint8_t addr) const;
   uint16_t knownCoinValue(const HopperState& state) const;
+  int8_t findCoinPositionByValue(const HopperState& state, uint16_t valueCents) const;
+  bool coinValueAccepted(const HopperState& state, uint16_t valueCents, CoinFilterReason& reason) const;
   void updateDispensedFromPoll(HopperState& state, uint16_t remaining, uint16_t paid, uint16_t unpaid);
   void updateState(const CcTalkTransaction& t);
   HopperState* mutableStateFor(uint8_t addr);

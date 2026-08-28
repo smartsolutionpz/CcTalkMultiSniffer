@@ -3680,6 +3680,7 @@ static void initCcTalkSniffer() {
   g_coin.resetState();
   g_hopperAlbericiDiscriminator.resetState();
   g_hopperAlbericiHopperCd.resetState();
+  g_hopperAlbericiEvolution.resetState();
   g_hopperAzkoyenDiscriminator.resetState();
   g_hopperSuzoEvolution.resetState();
   g_billValidatorIpro.resetState();
@@ -3690,6 +3691,7 @@ static void initCcTalkSniffer() {
   g_router.add(&g_coin);
   g_router.add(&g_hopperAlbericiDiscriminator);
   g_router.add(&g_hopperAlbericiHopperCd);
+  g_router.add(&g_hopperAlbericiEvolution);
   g_router.add(&g_hopperAzkoyenDiscriminator);
   g_router.add(&g_hopperSuzoEvolution);
   g_router.add(&g_billValidatorIpro);

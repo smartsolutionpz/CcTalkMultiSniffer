@@ -968,13 +968,25 @@ void RemoteRegistroEventiService::loop() {
       }
       _internetAvailable = false;
       _internetFailureLogged = true;
-      _status.setMqttConnected(false);
-      if (_mqttClient.connected()) _mqttClient.disconnect();
+      // NB: la sessione MQTT non viene chiusa qui. Un test HTTP fallito non
+      // implica che il broker MQTT sia irraggiungibile (puo' trattarsi di un
+      // problema del solo host web / del file test_connection.php). La gestione
+      // della (ri)connessione MQTT e' delegata interamente a mqttLoop().
     }
   }
 
-  // Senza un test Internet valido non tenta MQTT, non interroga il DB remoto
-  // e non invia dati contabili.
+  // Watchdog MQTT: indipendente dall'esito del test HTTP su Internet. Finche' il
+  // WiFi e' connesso e i parametri MQTT sono configurati, mqttLoop() ritenta
+  // periodicamente la connessione al broker (ogni appconfig::MQTT_RECONNECT_INTERVAL_MS)
+  // e mantiene viva la sessione quando connessa. In questo modo, se la prima
+  // connessione MQTT fallisce, il servizio continua a riprovare senza bisogno
+  // di riavviare il dispositivo.
+  if (_mqttEnabled) {
+    mqttLoop();
+  }
+
+  // Senza un test Internet valido non interroga il DB remoto e non invia i dati
+  // contabili via HTTP.
   if (!_internetAvailable) return;
 
   if (_connectionSnapshotPending &&
@@ -996,7 +1008,9 @@ void RemoteRegistroEventiService::loop() {
   }
 
   if (_mqttEnabled) {
-    mqttLoop();
+    // In modalita' MQTT i comandi arrivano via sottoscrizione: nessun polling
+    // HTTP request/response. Il pump della sessione MQTT e' gia' stato eseguito
+    // sopra dal watchdog.
     return;
   }
 
@@ -1116,7 +1130,12 @@ void RemoteRegistroEventiService::mqttBuildResponseTopic(char* buf, size_t len) 
 }
 
 bool RemoteRegistroEventiService::mqttConnect() {
-  if (!_wifi.isConnected() || !_internetAvailable) {
+  // La connessione al broker dipende solo dal WiFi e dai parametri configurati,
+  // non dall'esito del test HTTP su Internet: il broker viene ricontattato anche
+  // quando l'endpoint HTTP di verifica non risponde.
+  if (!_wifi.isConnected() ||
+      _mqttBrokerHost[0] == '\0' ||
+      _locationCode[0] == '\0') {
     _status.setMqttConnected(false);
     return false;
   }
@@ -1157,8 +1176,13 @@ void RemoteRegistroEventiService::mqttLoop() {
 
   if (!_mqttClient.connected()) {
     _status.setMqttConnected(false);
-    if ((uint32_t)(now - _lastMqttReconnectAttemptMs) >= appconfig::MQTT_RECONNECT_INTERVAL_MS) {
+    if (_lastMqttReconnectAttemptMs == 0 ||
+        (uint32_t)(now - _lastMqttReconnectAttemptMs) >= appconfig::MQTT_RECONNECT_INTERVAL_MS) {
       _lastMqttReconnectAttemptMs = now;
+      // Chiude eventuali socket TLS rimasti in uno stato inconsistente dopo un
+      // errore precedente: senza questo passaggio la riconnessione potrebbe
+      // restare bloccata fino al riavvio del dispositivo.
+      _mqttClient.disconnect();
       mqttConnect();
     }
     return;
