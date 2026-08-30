@@ -72,7 +72,12 @@ private:
   // Handler HTML/API.
   void handleRoot();
   void handleStatusPage();
+  void handleLevelsPage();
   void handleSettingsPage();
+  void handleSettingsWifiPage();
+  void handleSettingsServerPage();
+  void handleSettingsPeripheralsPage();
+  void handleSettingsJs();
   void handleAppCss();
   void handleHealth();
   void handleApiStatus();

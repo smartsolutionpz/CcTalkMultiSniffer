@@ -79,6 +79,11 @@ public:
     uint32_t recyclerInventoryTotalEuro = 0;
     bool iproRecycleBoxMapValid = false;
     uint8_t iproRecycleBoxEuro[2] = {0};
+    // Ultimo conteggio grezzo per box letto da 0x24 (req_recycle_current).
+    // Serve a riconoscere le banconote in uscita: un calo del conteggio fra
+    // due letture consecutive corrisponde a note dispensate dal recycler.
+    bool iproRecycleBoxCountValid = false;
+    uint16_t iproRecycleBoxCount[2] = {0};
 
     bool lastFaultValid = false;
     uint8_t lastFaultCode = 0;

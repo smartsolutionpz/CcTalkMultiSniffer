@@ -107,6 +107,12 @@ bool AppSettingsStore::load(AppSettings& out) {
     out.hopperCoinValueCents[i] =
         prefs.getUShort(key, kDefaultHopperCoinValueCents);
   }
+  for (uint8_t i = 0; i < kHopperAddressCount; i++) {
+    char key[12] = {0};
+    snprintf(key, sizeof(key), "hop_sp%u", (unsigned)(kHopperAddressMin + i));
+    const uint8_t stored = prefs.getUChar(key, 0);
+    out.hopperSorterExcludedPath[i] = (stored >= 1 && stored <= 5) ? stored : 0;
+  }
   out.billInValidatorMask =
       sanitizeBillValidatorContributionMask(prefs.getUShort("bill_in_vm", kAllBillValidatorMask));
   out.billOutValidatorMask =
@@ -194,6 +200,12 @@ bool AppSettingsStore::save(const AppSettings& in) {
     char key[12] = {0};
     snprintf(key, sizeof(key), "hop_cv%u", (unsigned)(kHopperAddressMin + i));
     ok = ok && prefs.putUShort(key, in.hopperCoinValueCents[i]) > 0;
+  }
+  for (uint8_t i = 0; i < kHopperAddressCount; i++) {
+    char key[12] = {0};
+    snprintf(key, sizeof(key), "hop_sp%u", (unsigned)(kHopperAddressMin + i));
+    const uint8_t path = in.hopperSorterExcludedPath[i];
+    ok = ok && prefs.putUChar(key, (path >= 1 && path <= 5) ? path : 0) > 0;
   }
   ok = ok &&
        prefs.putUShort("bill_in_vm", sanitizeBillValidatorContributionMask(in.billInValidatorMask)) > 0;

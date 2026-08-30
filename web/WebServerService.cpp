@@ -188,7 +188,12 @@ void WebServerService::begin() {
   // Routing HTTP centralizzato: ogni endpoint e registrato una sola volta.
   _server.on("/", HTTP_GET, [this]() { handleRoot(); });
   _server.on("/status", HTTP_GET, [this]() { handleStatusPage(); });
+  _server.on("/livelli", HTTP_GET, [this]() { handleLevelsPage(); });
   _server.on("/settings", HTTP_GET, [this]() { handleSettingsPage(); });
+  _server.on("/settings/wifi", HTTP_GET, [this]() { handleSettingsWifiPage(); });
+  _server.on("/settings/server", HTTP_GET, [this]() { handleSettingsServerPage(); });
+  _server.on("/settings/peripherals", HTTP_GET, [this]() { handleSettingsPeripheralsPage(); });
+  _server.on("/settings.js", HTTP_GET, [this]() { handleSettingsJs(); });
   _server.on("/app.css", HTTP_GET, [this]() { handleAppCss(); });
   _server.on("/health", HTTP_GET, [this]() { handleHealth(); });
   _server.on("/api/status", HTTP_GET, [this]() { handleApiStatus(); });
@@ -220,88 +225,143 @@ void WebServerService::handleAppCss() {
   // Foglio di stile condiviso da tutte le pagine: evita di triplicare il CSS
   // nei tre blocchi PROGMEM e riduce il peso totale servito dal firmware.
   static const char CSS[] PROGMEM = R"CSS(
+/* Layout ottimizzato per smartphone e tablet in verticale (portrait):
+   contenuto in colonna singola fino a ~900px, multi-colonna solo su
+   schermi larghi. Tutti i controlli hanno target touch >= 44px. */
 :root{
-  --bg:#f1f4f9; --panel:#fff; --text:#1b2330; --muted:#5b6b82; --border:#e1e7f0;
-  --primary:#2563eb; --primary-dark:#1d4ed8; --warn:#d97706; --ok:#16a34a; --bad:#dc2626;
-  --radius:14px; --shadow:0 1px 2px rgba(15,23,42,.06),0 1px 8px rgba(15,23,42,.05);
+  --bg:#eef1f7; --bg-accent:#e3e8f4;
+  --panel:#ffffff; --panel-alt:#f5f8fc;
+  --text:#1a2233; --muted:#5c6b82;
+  --border:#dde3ef; --border-strong:#c8d2e4;
+  --primary:#3457e5; --primary-dark:#2440c4; --primary-soft:#eaefff;
+  --warn:#c2650a; --warn-soft:#fbeedd; --ok:#0f8a43; --bad:#d02f2f;
+  --radius:16px; --radius-sm:11px;
+  --shadow:0 1px 2px rgba(20,30,55,.05),0 6px 20px rgba(20,30,55,.06);
+  --shadow-sm:0 1px 2px rgba(20,30,55,.06);
+  --tap:44px;
 }
 *{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
 html,body{margin:0;padding:0;}
 body{
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-  background:var(--bg); color:var(--text); line-height:1.45; padding-bottom:28px; font-size:15px;
+  background:linear-gradient(180deg,var(--bg-accent),var(--bg) 260px) fixed;
+  color:var(--text); line-height:1.55; font-size:16px; padding-bottom:40px;
+  -webkit-font-smoothing:antialiased;
 }
+
+/* App bar: in colonna sui telefoni, in riga da tablet in su */
 .appbar{
-  position:sticky; top:0; z-index:10; display:flex; align-items:center; justify-content:space-between;
-  gap:8px; background:var(--panel); border-bottom:1px solid var(--border); padding:10px 14px; flex-wrap:wrap;
+  position:sticky; top:0; z-index:20;
+  display:flex; flex-direction:column; align-items:stretch; gap:10px;
+  background:rgba(255,255,255,.92); backdrop-filter:saturate(180%) blur(8px);
+  -webkit-backdrop-filter:saturate(180%) blur(8px);
+  border-bottom:1px solid var(--border); padding:12px 16px;
 }
-.appbar h1{font-size:17px; margin:0; font-weight:600;}
+.appbar h1{font-size:19px; margin:0; font-weight:700; letter-spacing:-.01em;}
 .appbar .actions{display:flex; gap:8px; flex-wrap:wrap;}
+@media (min-width:760px){
+  .appbar{flex-direction:row; align-items:center; justify-content:space-between;}
+}
+
 .pill{
-  display:inline-flex; align-items:center; gap:6px; border-radius:999px; padding:6px 12px; font-size:12px;
-  font-weight:500; background:#eef2ff; color:#3346a3; border:1px solid #d7defc; white-space:nowrap;
+  display:inline-flex; align-items:center; gap:6px; border-radius:999px; padding:7px 13px;
+  font-size:12.5px; font-weight:600; background:var(--primary-soft); color:#2a3aa0;
+  border:1px solid #d3ddff; white-space:nowrap;
 }
-.pill.ok{background:#e7f8ee; color:#146c3a; border-color:#bfe8cf;}
-.pill.bad{background:#fdecec; color:#a3271f; border-color:#f7c9c6;}
-main{max-width:880px; margin:0 auto; padding:12px; display:flex; flex-direction:column; gap:12px;}
-.card{background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:14px; box-shadow:var(--shadow);}
-.card h2{margin:0 0 10px 0; font-size:14px; font-weight:600;}
-.kv{margin:0; font-size:13px; white-space:pre-wrap; word-break:break-word; font-family:ui-monospace,Consolas,Menlo,monospace;}
-.grid-cards{display:grid; grid-template-columns:1fr; gap:12px;}
-@media (min-width:720px){.grid-cards{grid-template-columns:repeat(2,1fr);}}
-@media (min-width:1080px){.grid-cards{grid-template-columns:repeat(3,1fr);}}
+.pill.ok{background:#e3f6ea; color:#0c6b34; border-color:#b7e6c8;}
+.pill.bad{background:#fdeaea; color:#a52020; border-color:#f4c4c1;}
+
+main{max-width:820px; margin:0 auto; padding:16px; display:flex; flex-direction:column; gap:14px;}
+
+.card{
+  background:var(--panel); border:1px solid var(--border); border-radius:var(--radius);
+  padding:16px; box-shadow:var(--shadow);
+}
+.card .card{box-shadow:var(--shadow-sm); border-radius:var(--radius-sm);}
+.card h2{
+  margin:0 0 12px 0; font-size:13px; font-weight:700;
+  text-transform:uppercase; letter-spacing:.06em; color:var(--muted);
+}
+.kv{
+  margin:0; font-size:13px; line-height:1.5;
+  white-space:pre; overflow-x:auto; -webkit-overflow-scrolling:touch;
+  font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;
+  background:var(--panel-alt); border:1px solid var(--border);
+  border-radius:var(--radius-sm); padding:12px; color:#28324a;
+}
+
+/* Griglia card: colonna singola su telefono e tablet-portrait, 2 colonne solo oltre 900px */
+.grid-cards{display:grid; grid-template-columns:1fr; gap:14px;}
+@media (min-width:900px){.grid-cards{grid-template-columns:repeat(2,1fr);}}
+
 .btn{
-  appearance:none; border:0; border-radius:10px; padding:11px 16px; font-size:14px; font-weight:600;
+  appearance:none; border:0; border-radius:12px; padding:13px 18px; min-height:var(--tap);
+  font-size:15px; font-weight:600; font-family:inherit;
   background:var(--primary); color:#fff; cursor:pointer; text-align:center; text-decoration:none;
-  display:inline-flex; align-items:center; justify-content:center; gap:6px;
+  display:inline-flex; align-items:center; justify-content:center; gap:8px;
+  transition:background .12s ease, transform .04s ease;
 }
-.btn:active{background:var(--primary-dark);}
-.btn.secondary{background:#eef1f6; color:var(--text);}
+.btn:hover{background:var(--primary-dark);}
+.btn:active{transform:translateY(1px); background:var(--primary-dark);}
+.btn.secondary{background:var(--panel-alt); color:var(--text); border:1px solid var(--border-strong);}
+.btn.secondary:hover{background:#e9eef7;}
 .btn.warn{background:var(--warn);}
-.btn-row{display:flex; gap:8px; flex-wrap:wrap;}
-@media (max-width:480px){.btn-row .btn{flex:1 1 auto;}}
-label{font-size:13px; font-weight:500; display:block; margin-bottom:4px;}
+.btn.warn:hover{filter:brightness(.95);}
+.btn:disabled{opacity:.6; cursor:default;}
+.btn-row{display:flex; gap:10px; flex-wrap:wrap;}
+.btn-row .btn{flex:1 1 160px;}
+
+label{font-size:14px; font-weight:600; display:block; margin-bottom:6px; color:var(--text);}
 input,select{
-  width:100%; font-size:15px; padding:10px; border:1px solid var(--border); border-radius:10px;
+  width:100%; font-size:16px; padding:12px; min-height:var(--tap);
+  border:1px solid var(--border-strong); border-radius:var(--radius-sm);
   background:#fff; color:var(--text); font-family:inherit;
 }
-input:focus,select:focus{outline:2px solid var(--primary); outline-offset:1px;}
-.field{margin-bottom:10px;}
-.field-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px;}
-.status-text{font-size:12.5px; color:var(--muted); margin-top:8px; min-height:1.2em; white-space:pre-wrap;}
-.checkbox-row{display:flex; align-items:center; gap:8px; font-size:13px; font-weight:400;}
-.checkbox-row input{width:auto;}
-details.collapsible{border:1px solid var(--border); border-radius:10px; background:#f8fafc; overflow:hidden;}
+input:focus,select:focus{outline:2px solid var(--primary); outline-offset:1px; border-color:var(--primary);}
+.field{margin-bottom:14px;}
+.field:last-child{margin-bottom:0;}
+.field-grid{display:grid; grid-template-columns:1fr; gap:12px;}
+@media (min-width:560px){.field-grid{grid-template-columns:repeat(3,1fr);}}
+.status-text{font-size:13px; color:var(--muted); margin-top:10px; min-height:1.2em; white-space:pre-wrap; line-height:1.5;}
+.hint{font-size:13px; color:var(--muted); padding:4px 0;}
+.checkbox-row{display:flex; align-items:flex-start; gap:10px; font-size:14px; font-weight:500; line-height:1.45;}
+.checkbox-row input{width:20px; height:20px; min-height:0; margin-top:2px; flex:0 0 auto;}
+
+details.collapsible{border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--panel); overflow:hidden; box-shadow:var(--shadow-sm);}
 details.collapsible summary{
-  cursor:pointer; padding:11px 12px; font-size:13px; font-weight:600; list-style:none;
-  display:flex; align-items:center; gap:6px;
+  cursor:pointer; padding:14px; font-size:14px; font-weight:700; list-style:none;
+  display:flex; align-items:center; gap:8px; color:var(--text);
 }
 details.collapsible summary::-webkit-details-marker{display:none;}
 details.collapsible summary::before{content:'▸'; transition:transform .15s; color:var(--muted);}
 details.collapsible[open] summary::before{transform:rotate(90deg);}
-details.collapsible .body{padding:0 12px 12px 12px;}
-details.info{margin-top:6px;}
+details.collapsible .body{padding:0 14px 14px 14px;}
+details.info{margin-top:10px;}
 details.info summary{
-  cursor:pointer; font-size:12px; color:var(--primary); list-style:none;
-  display:inline-flex; align-items:center; gap:4px; font-weight:600;
+  cursor:pointer; font-size:13px; color:var(--primary); list-style:none;
+  display:inline-flex; align-items:center; gap:5px; font-weight:600;
 }
 details.info summary::-webkit-details-marker{display:none;}
 details.info summary::before{content:'ⓘ';}
-details.info .body{font-size:12px; color:var(--muted); margin-top:6px; padding:9px 10px; background:#f8fafc; border-radius:8px; border:1px solid var(--border);}
-.section{border-top:1px solid var(--border); padding-top:14px; margin-top:14px;}
+details.info .body{font-size:13px; color:var(--muted); margin-top:8px; padding:11px 12px; background:var(--panel-alt); border-radius:var(--radius-sm); border:1px solid var(--border); line-height:1.5;}
+.section{border-top:1px solid var(--border); padding-top:18px; margin-top:18px;}
 .section:first-of-type{border-top:0; padding-top:0; margin-top:0;}
-.section-title{margin:0 0 10px 0; font-size:15px; font-weight:600;}
-.device-item{display:flex; flex-direction:column; gap:8px; border:1px solid var(--border); border-radius:10px; padding:10px; background:#f8fafc; font-size:13px;}
-.device-item.info{background:#fff8e8; border-color:#f3d692;}
-.device-title{font-weight:600;}
-.device-note{font-size:12px; color:var(--muted);}
-.device-list{margin:0; padding-left:18px; font-size:13px;}
-.mask-group{display:flex; flex-direction:column; gap:8px;}
-.mask-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:8px;}
-.mask-grid label{display:flex; align-items:center; gap:8px; border:1px solid var(--border); border-radius:10px; padding:9px; background:#f8fafc; font-size:13px; font-weight:400; margin:0;}
-.mask-grid label input{width:auto;}
-.secret-field{display:flex; gap:8px; align-items:center;}
+.section-title{margin:0 0 14px 0; font-size:16px; font-weight:700; letter-spacing:-.01em;}
+.device-item{display:flex; flex-direction:column; gap:10px; border:1px solid var(--border); border-radius:var(--radius-sm); padding:12px; background:var(--panel-alt); font-size:14px;}
+.device-item.info{background:var(--warn-soft); border-color:#f0d4a6;}
+.device-meta{display:flex; flex-direction:column; gap:3px;}
+.device-title{font-weight:700;}
+.device-note{font-size:12.5px; color:var(--muted); line-height:1.45;}
+.device-list{margin:6px 0 0 0; padding-left:20px; font-size:14px; line-height:1.6;}
+.mask-group{display:flex; flex-direction:column; gap:10px;}
+.mask-grid{display:grid; grid-template-columns:1fr; gap:10px;}
+@media (min-width:560px){.mask-grid{grid-template-columns:repeat(2,1fr);}}
+.mask-grid label{display:flex; align-items:center; gap:10px; border:1px solid var(--border-strong); border-radius:var(--radius-sm); padding:12px; background:#fff; font-size:14px; font-weight:500; margin:0; min-height:var(--tap);}
+.mask-grid label input{width:20px; height:20px; min-height:0; flex:0 0 auto;}
+.secret-field{display:flex; gap:10px; align-items:center;}
 .secret-field input{flex:1 1 auto; min-width:0;}
+.secret-field .btn{flex:0 0 auto;}
 .hidden{display:none !important;}
 a{color:var(--primary);}
 )CSS";
@@ -310,222 +370,16 @@ a{color:var(--primary);}
 }
 
 void WebServerService::handleRoot() {
-  // Root page dinamica in base alla modalita UI attiva.
-  if (_uiMode != UI_MODE_PROG) {
-    handleStatusPage();
-    return;
-  }
-
+  // Pagina principale: sezione "Stato" (stesse card di /status) piu i pulsanti di
+  // navigazione verso Stato, Imposta livelli e Impostazioni. Fuori da PROG viene
+  // mostrato anche il pulsante per entrare in modalita PROG.
   static const char PAGE[] PROGMEM = R"HTML(
 <!doctype html>
 <html lang="it">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>CcTalkMultiSniffer PROG</title>
-  <link rel="stylesheet" href="/app.css">
-</head>
-<body>
-  <div class="appbar">
-    <h1>Modalita PROG</h1>
-    <div id="wifiIndicator" class="pill">WiFi: loading...</div>
-  </div>
-  <main>
-    <div class="card">
-      <h2>Azioni</h2>
-      <div class="btn-row">
-        <a class="btn" href="/settings">Impostazioni</a>
-        <a class="btn secondary" href="/status">Stato</a>
-        <button id="btnTestConnection" class="btn secondary" type="button">Test connessione DB</button>
-      </div>
-      <div id="progStatus" class="status-text"></div>
-    </div>
-    <div class="card">
-      <h2>Cassette banconote recycler</h2>
-      <div class="field-grid">
-        <div class="field">
-          <label for="billCassette10Input">Cassetta 10 EUR</label>
-          <input id="billCassette10Input" type="number" step="1" placeholder="0">
-        </div>
-        <div class="field">
-          <label for="billCassette20Input">Cassetta 20 EUR</label>
-          <input id="billCassette20Input" type="number" step="1" placeholder="0">
-        </div>
-        <div class="field">
-          <label for="billCassette50Input">Cassetta 50 EUR</label>
-          <input id="billCassette50Input" type="number" step="1" placeholder="0">
-        </div>
-      </div>
-      <div class="btn-row" style="margin-top:10px;">
-        <button id="btnSaveBillRecycler" class="btn" type="button">Salva cassette banconote</button>
-      </div>
-      <details class="info">
-        <summary>Info</summary>
-        <div class="body">Inserisci manualmente il numero di banconote presenti nelle tre cassette recycler.</div>
-      </details>
-    </div>
-    <div class="card">
-      <h2>Modalita recycler MD100</h2>
-      <div class="field">
-        <label class="checkbox-row">
-          <input id="billRecyclerUseInventoryCommand" type="checkbox">
-          Usa il comando inventory del recycler come valore prioritario
-        </label>
-      </div>
-      <div class="btn-row">
-        <button id="btnSaveBillRecyclerMode" class="btn" type="button">Salva modalita recycler</button>
-      </div>
-      <details class="info">
-        <summary>Info</summary>
-        <div class="body">Se disattivato, il valore recycler MD100 viene calcolato solo dagli eventi di inserimento ed erogazione, ignorando il comando inventory.</div>
-      </details>
-    </div>
-    <details class="collapsible">
-      <summary>Note</summary>
-      <div class="body status-text">
-        AP locale attivo: 192.168.4.1<br>
-        Il test usa le impostazioni salvate e prova prima il server remoto, poi il socket MySQL se configurato.
-      </div>
-    </details>
-  </main>
-  <script>
-    function s(v) { return (v === undefined || v === null) ? '' : String(v); }
-    let billRecyclerDirty = false;
-    function findRecyclerEntry(data) {
-      const list = (data && data.cctalk && Array.isArray(data.cctalk.recycler)) ? data.cctalk.recycler : [];
-      return list.length > 0 ? list[0] : null;
-    }
-    function setBillRecyclerInputs(entry) {
-      if (billRecyclerDirty) return;
-      const values = {
-        billCassette10Input: String(entry ? (Number(entry.count10 || 0)) : 0),
-        billCassette20Input: String(entry ? (Number(entry.count20 || 0)) : 0),
-        billCassette50Input: String(entry ? (Number(entry.count50 || 0)) : 0)
-      };
-      Object.entries(values).forEach(([id, value]) => {
-        const input = document.getElementById(id);
-        if (input && document.activeElement !== input) input.value = value;
-      });
-    }
-
-    let wifiIndicatorInFlight = false;
-    async function refreshWifiIndicator() {
-      if (wifiIndicatorInFlight) return;
-      wifiIndicatorInFlight = true;
-      try {
-        const data = await fetch('/api/status', { cache: 'no-store' }).then(r => r.json());
-        const ssid = s(data.wifi.ssid) || '-';
-        const label = data.wifi.connected ? `WiFi connesso: ${ssid}` : `WiFi non connesso: ${ssid}`;
-        document.getElementById('wifiIndicator').textContent = label;
-        setBillRecyclerInputs(findRecyclerEntry(data));
-      } catch (e) {
-        document.getElementById('wifiIndicator').textContent = 'WiFi: stato non disponibile';
-      } finally {
-        wifiIndicatorInFlight = false;
-      }
-    }
-
-    async function loadProgSettings() {
-      try {
-        const data = await fetch('/api/settings', { cache: 'no-store' }).then(r => r.json());
-        const settings = data && data.settings ? data.settings : {};
-        document.getElementById('billRecyclerUseInventoryCommand').checked =
-          settings.billRecyclerUseInventoryCommand !== false;
-      } catch (e) {
-      }
-    }
-
-    async function testConnection() {
-      const status = document.getElementById('progStatus');
-      status.textContent = 'Test connessione in corso...';
-      try {
-        const r = await fetch('/api/settings/testconnection', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: ''
-        });
-        const data = await r.json();
-        status.textContent = data.ok ? `OK: ${s(data.message)}` : `Errore: ${s(data.message)}`;
-        refreshWifiIndicator();
-      } catch (e) {
-        status.textContent = 'Errore rete durante il test di connessione';
-      }
-    }
-
-    async function saveBillRecycler() {
-      const status = document.getElementById('progStatus');
-      const raw10 = Number(document.getElementById('billCassette10Input').value);
-      const raw20 = Number(document.getElementById('billCassette20Input').value);
-      const raw50 = Number(document.getElementById('billCassette50Input').value);
-      if (!Number.isFinite(raw10) || raw10 < 0 || !Number.isFinite(raw20) || raw20 < 0 || !Number.isFinite(raw50) || raw50 < 0) {
-        status.textContent = 'Valori cassette banconote non validi';
-        return;
-      }
-
-      status.textContent = 'Salvataggio cassette banconote in corso...';
-      try {
-        const payload = {
-          cassette10Count: Math.round(raw10),
-          cassette20Count: Math.round(raw20),
-          cassette50Count: Math.round(raw50)
-        };
-        const r = await fetch('/api/bills/recycler/base', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        const data = await r.json();
-        status.textContent = data.ok ? `OK: ${s(data.message)}` : `Errore: ${s(data.message)}`;
-        refreshWifiIndicator();
-      } catch (e) {
-        status.textContent = 'Errore rete durante il salvataggio cassette banconote';
-      }
-    }
-
-    async function saveBillRecyclerMode() {
-      const status = document.getElementById('progStatus');
-      const enabled = document.getElementById('billRecyclerUseInventoryCommand').checked;
-      status.textContent = 'Salvataggio modalita recycler in corso...';
-      try {
-        const body = new URLSearchParams();
-        body.set('billRecyclerUseInventoryCommand', enabled ? '1' : '0');
-        const r = await fetch('/api/bills/recycler/inventory-mode', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: body.toString()
-        });
-        const data = await r.json();
-        status.textContent = data.ok ? `OK: ${s(data.message)}` : `Errore: ${s(data.message)}`;
-      } catch (e) {
-        status.textContent = 'Errore rete durante il salvataggio modalita recycler';
-      }
-    }
-
-    document.getElementById('btnTestConnection').addEventListener('click', testConnection);
-    document.getElementById('btnSaveBillRecycler').addEventListener('click', saveBillRecycler);
-    document.getElementById('btnSaveBillRecyclerMode').addEventListener('click', saveBillRecyclerMode);
-    ['billCassette10Input', 'billCassette20Input', 'billCassette50Input'].forEach((id) => {
-      document.getElementById(id).addEventListener('input', () => { billRecyclerDirty = true; });
-    });
-    loadProgSettings();
-    refreshWifiIndicator();
-    setInterval(refreshWifiIndicator, 5000);
-  </script>
-</body>
-</html>
-)HTML";
-  _server.send(200, "text/html", PAGE);
-}
-
-void WebServerService::handleStatusPage() {
-  // Pagina principale di monitoraggio: HTML statico con refresh via fetch JSON.
-  static const char PAGE[] PROGMEM = R"HTML(
-<!doctype html>
-<html lang="it">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>CcTalkMultiSniffer Dashboard</title>
+  <title>CcTalkMultiSniffer</title>
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
@@ -537,44 +391,23 @@ void WebServerService::handleStatusPage() {
     </div>
   </div>
   <main>
-    <div class="grid-cards">
-      <div class="card"><h2>WiFi</h2><pre id="wifi" class="kv">loading...</pre></div>
-      <div class="card"><h2>MQTT</h2><pre id="mqttStatus" class="kv">loading...</pre></div>
-      <div class="card"><h2>Data e ora</h2><pre id="clock" class="kv">loading...</pre></div>
-      <div class="card"><h2>ccTalk Bus</h2><pre id="bus" class="kv">loading...</pre></div>
-      <div class="card"><h2>Economics</h2><pre id="econ" class="kv">loading...</pre></div>
+    <div class="card">
+      <h2>Menu</h2>
+      <div class="btn-row">
+        <a class="btn" href="/status">Stato</a>
+        <a class="btn" href="/livelli">Imposta livelli</a>
+        <a class="btn" href="/settings">Impostazioni</a>
+      </div>
     </div>
     <div class="card">
-      <h2>Azioni</h2>
-      <div class="btn-row">
-        <button id="btnReset" class="btn secondary" type="button">Azzera</button>
-        <button id="btnSaveRemote" class="btn secondary" type="button">Salva su DB server</button>
+      <h2>Stato</h2>
+      <div class="grid-cards">
+        <div class="card"><h2>WiFi</h2><pre id="wifi" class="kv">loading...</pre></div>
+        <div class="card"><h2>MQTT</h2><pre id="mqttStatus" class="kv">loading...</pre></div>
+        <div class="card"><h2>Data e ora</h2><pre id="clock" class="kv">loading...</pre></div>
+        <div class="card"><h2>ccTalk Bus</h2><pre id="bus" class="kv">loading...</pre></div>
+        <div class="card"><h2>Economics</h2><pre id="econ" class="kv">loading...</pre></div>
       </div>
-      <div class="field" style="margin-top:10px;">
-        <label for="coinLevelInput">Livello iniziale monete (EUR)</label>
-        <div class="btn-row">
-          <input id="coinLevelInput" type="number" step="0.01" min="0" placeholder="0.00" style="flex:1 1 160px;">
-          <button id="btnSetBase" class="btn secondary" type="button">Imposta livello iniziale + reset</button>
-        </div>
-      </div>
-      <div class="field-grid" style="margin-top:10px;">
-        <div class="field">
-          <label for="billCassette10Input">Cassetta 10 EUR</label>
-          <input id="billCassette10Input" type="number" step="1" placeholder="0">
-        </div>
-        <div class="field">
-          <label for="billCassette20Input">Cassetta 20 EUR</label>
-          <input id="billCassette20Input" type="number" step="1" placeholder="0">
-        </div>
-        <div class="field">
-          <label for="billCassette50Input">Cassetta 50 EUR</label>
-          <input id="billCassette50Input" type="number" step="1" placeholder="0">
-        </div>
-      </div>
-      <div class="btn-row" style="margin-top:10px;">
-        <button id="btnSaveBillRecycler" class="btn secondary" type="button">Salva cassette banconote</button>
-      </div>
-      <div id="actionStatus" class="status-text"></div>
     </div>
     <details class="collapsible">
       <summary>Log di sistema</summary>
@@ -583,23 +416,6 @@ void WebServerService::handleStatusPage() {
   </main>
   <script>
     function s(v) { return (v === undefined || v === null) ? '' : String(v); }
-    let billRecyclerDirty = false;
-    function findRecyclerEntry(data) {
-      const list = (data && data.cctalk && Array.isArray(data.cctalk.recycler)) ? data.cctalk.recycler : [];
-      return list.length > 0 ? list[0] : null;
-    }
-    function setBillRecyclerInputs(entry) {
-      if (billRecyclerDirty) return;
-      const values = {
-        billCassette10Input: String(entry ? (Number(entry.count10 || 0)) : 0),
-        billCassette20Input: String(entry ? (Number(entry.count20 || 0)) : 0),
-        billCassette50Input: String(entry ? (Number(entry.count50 || 0)) : 0)
-      };
-      Object.entries(values).forEach(([id, value]) => {
-        const input = document.getElementById(id);
-        if (input && document.activeElement !== input) input.value = value;
-      });
-    }
     function updateWifiIndicator(wifi) {
       const ssid = s(wifi.ssid) || '-';
       document.getElementById('wifiIndicator').textContent =
@@ -667,12 +483,6 @@ void WebServerService::handleStatusPage() {
           econ.push(`BV[${r.addr}] RecyclerInventory: 10EUR=${r.count10} 20EUR=${r.count20} 50EUR=${r.count50}`);
         }
         document.getElementById('econ').textContent = econ.join('\n');
-        setBillRecyclerInputs(findRecyclerEntry(data));
-
-        const baseInput = document.getElementById('coinLevelInput');
-        if (baseInput && document.activeElement !== baseInput) {
-          baseInput.value = (data.cctalk.economic.coinLevelBaseCents / 100.0).toFixed(2);
-        }
 
         document.getElementById('logs').textContent = (data.logs || []).join('\n');
       } catch (e) {
@@ -687,6 +497,313 @@ void WebServerService::handleStatusPage() {
 
     refresh();
     setInterval(refresh, 5000);
+  </script>
+</body>
+</html>
+)HTML";
+
+  String page(PAGE);
+  if (_uiMode == UI_MODE_PROG) {
+    page.replace("<!--PROG_MENU_BUTTON-->", "");
+  } else {
+    page.replace("<!--PROG_MENU_BUTTON-->",
+      "<button class=\"btn warn\""
+      " onclick=\"this.disabled=true;this.textContent='Riavvio...';"
+      "fetch('/api/mode/prog',{method:'POST'})"
+      ".catch(()=>{this.disabled=false;this.textContent='Modalita PROG';})\""
+      ">Modalita PROG</button>");
+  }
+  _server.send(200, "text/html", page);
+}
+
+void WebServerService::handleStatusPage() {
+  // Pagina principale di monitoraggio: HTML statico con refresh via fetch JSON.
+  static const char PAGE[] PROGMEM = R"HTML(
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>CcTalkMultiSniffer Dashboard</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="appbar">
+    <h1>CcTalkMultiSniffer</h1>
+    <div class="actions">
+      <div id="wifiIndicator" class="pill">WiFi: loading...</div>
+      <!--PROG_MENU_BUTTON-->
+    </div>
+  </div>
+  <main>
+    <div class="grid-cards">
+      <div class="card"><h2>WiFi</h2><pre id="wifi" class="kv">loading...</pre></div>
+      <div class="card"><h2>MQTT</h2><pre id="mqttStatus" class="kv">loading...</pre></div>
+      <div class="card"><h2>Data e ora</h2><pre id="clock" class="kv">loading...</pre></div>
+      <div class="card"><h2>ccTalk Bus</h2><pre id="bus" class="kv">loading...</pre></div>
+      <div class="card"><h2>Economics</h2><pre id="econ" class="kv">loading...</pre></div>
+    </div>
+    <div class="card">
+      <div class="btn-row">
+        <a class="btn secondary" href="/">Menu</a>
+        <a class="btn secondary" href="/livelli">Imposta livelli</a>
+      </div>
+    </div>
+    <details class="collapsible">
+      <summary>Log di sistema</summary>
+      <div class="body"><pre id="logs" class="kv">loading...</pre></div>
+    </details>
+  </main>
+  <script>
+    function s(v) { return (v === undefined || v === null) ? '' : String(v); }
+    function updateWifiIndicator(wifi) {
+      const ssid = s(wifi.ssid) || '-';
+      document.getElementById('wifiIndicator').textContent =
+        wifi.connected ? `WiFi connesso: ${ssid}` : `WiFi non connesso: ${ssid}`;
+    }
+
+    let refreshInFlight = false;
+    async function refresh() {
+      if (refreshInFlight) return;
+      refreshInFlight = true;
+      try {
+        const data = await fetch('/api/status', { cache: 'no-store' }).then(r => r.json());
+        updateWifiIndicator(data.wifi || {});
+
+        const wifi = [];
+        wifi.push(`timestamp: ${s(data.timestamp)} ms`);
+        wifi.push(`connected: ${data.wifi.connected ? 'yes' : 'no'}`);
+        wifi.push(`status: ${s(data.wifi.status) || '-'}`);
+        wifi.push(`ssid: ${s(data.wifi.ssid) || '-'}`);
+        wifi.push(`apActive: ${data.wifi.apActive ? 'yes' : 'no'}`);
+        wifi.push(`ip: ${s(data.wifi.ip) || '-'}`);
+        wifi.push(`rssi: ${s(data.wifi.rssi)}`);
+        document.getElementById('wifi').textContent = wifi.join('\n');
+
+        const mqtt = [];
+        const mqttConn = data.mqtt && data.mqtt.connected;
+        mqtt.push(`connected: ${mqttConn ? 'yes' : 'no'}`);
+        document.getElementById('mqttStatus').textContent = mqtt.join('\n');
+
+        const clock = [];
+        if (data.time && data.time.valid) {
+          clock.push(`source: ${data.time.syncedFromInternet ? 'internet' : 'rtc'}`);
+          clock.push(`local: ${s(data.time.display)}`);
+          clock.push(`iso8601: ${s(data.time.iso8601)}`);
+          clock.push(`unix: ${s(data.time.unix)}`);
+        } else {
+          clock.push('source: internet (attesa sync)');
+          clock.push('local: non disponibile');
+          clock.push('note: data/ora valida disponibile dopo sincronizzazione NTP');
+        }
+        document.getElementById('clock').textContent = clock.join('\n');
+
+        const bus = [];
+        bus.push(`devices: ${s(data.cctalk.detectedDevices)}`);
+        bus.push(`txFrames: ${s(data.cctalk.txFrames)}`);
+        bus.push(`rxFrames: ${s(data.cctalk.rxFrames)}`);
+        bus.push(`transactions: ${s(data.cctalk.transactions)}`);
+        bus.push(`snifferLoops: ${s(data.cctalk.snifferLoops)}`);
+        bus.push(`snifferLastUs: ${s(data.cctalk.snifferLoopLastUs)}`);
+        bus.push(`snifferMaxUs: ${s(data.cctalk.snifferLoopMaxUs)}`);
+        bus.push(`snifferGapMaxUs: ${s(data.cctalk.snifferLoopGapMaxUs)}`);
+        bus.push(`snifferOverBudget: ${s(data.cctalk.snifferOverBudgetLoops)}`);
+        bus.push(`lastTx: ${s(data.cctalk.lastTx)}`);
+        bus.push(`lastRx: ${s(data.cctalk.lastRx)}`);
+        bus.push(`lastEvent: ${s(data.cctalk.lastEventDecoded)}`);
+        document.getElementById('bus').textContent = bus.join('\n');
+
+        const econ = [];
+        econ.push(s(data.cctalk.formatted.line1));
+        econ.push(s(data.cctalk.formatted.line2));
+        econ.push(s(data.cctalk.formatted.line3));
+        econ.push(`ValoreMoneteIniziale: ${(data.cctalk.economic.coinLevelBaseCents / 100.0).toFixed(2)} EUR`);
+        econ.push(`ValoreMoneteAttuale: ${(data.cctalk.economic.coinCurrentCents / 100.0).toFixed(2)} EUR`);
+        for (const r of (data.cctalk.recycler || [])) {
+          econ.push(`BV[${r.addr}] RecyclerInventory: 10EUR=${r.count10} 20EUR=${r.count20} 50EUR=${r.count50}`);
+        }
+        document.getElementById('econ').textContent = econ.join('\n');
+
+        document.getElementById('logs').textContent = (data.logs || []).join('\n');
+      } catch (e) {
+        document.getElementById('wifiIndicator').textContent = 'WiFi: stato non disponibile';
+        document.getElementById('wifi').textContent = 'Errore fetch /api/status';
+        document.getElementById('mqttStatus').textContent = 'Errore fetch /api/status';
+        document.getElementById('clock').textContent = 'Errore fetch /api/status';
+      } finally {
+        refreshInFlight = false;
+      }
+    }
+
+    refresh();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>
+)HTML";
+
+  String page(PAGE);
+  if (_uiMode == UI_MODE_PROG) {
+    page.replace("<!--PROG_MENU_BUTTON-->",
+      "<a class=\"btn secondary\" href=\"/settings\">Impostazioni</a>"
+      "<a class=\"btn secondary\" href=\"/\">Menu</a>");
+  } else {
+    page.replace("<!--PROG_MENU_BUTTON-->",
+      "<button class=\"btn warn\""
+      " onclick=\"this.disabled=true;this.textContent='Riavvio...';"
+      "fetch('/api/mode/prog',{method:'POST'})"
+      ".catch(()=>{this.disabled=false;this.textContent='Modalita PROG';})\""
+      ">Modalita PROG</button>");
+  }
+  _server.send(200, "text/html", page);
+}
+
+void WebServerService::handleLevelsPage() {
+  // Pagina "Imposta livelli": livello monete, cassette recycler, modalita MD100,
+  // valori dei contatori economici e azzeramento. Sempre accessibile.
+  static const char PAGE[] PROGMEM = R"HTML(
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>CcTalkMultiSniffer Livelli</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="appbar">
+    <h1>Imposta livelli</h1>
+    <div id="wifiIndicator" class="pill">WiFi: loading...</div>
+  </div>
+  <main>
+    <div class="card">
+      <h2>Contatori economici</h2>
+      <pre id="econ" class="kv">loading...</pre>
+      <div class="btn-row" style="margin-top:10px;">
+        <button id="btnReset" class="btn secondary" type="button">Azzera</button>
+        <button id="btnSaveRemote" class="btn secondary" type="button">Salva su DB server</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Livello monete</h2>
+      <div class="field">
+        <label for="coinLevelInput">Livello iniziale monete (EUR)</label>
+        <div class="btn-row">
+          <input id="coinLevelInput" type="number" step="0.01" min="0" placeholder="0.00" style="flex:1 1 160px;">
+          <button id="btnSetBase" class="btn secondary" type="button">Imposta livello iniziale + reset</button>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Cassette banconote recycler</h2>
+      <div class="field-grid">
+        <div class="field">
+          <label for="billCassette10Input">Cassetta 10 EUR</label>
+          <input id="billCassette10Input" type="number" step="1" placeholder="0">
+        </div>
+        <div class="field">
+          <label for="billCassette20Input">Cassetta 20 EUR</label>
+          <input id="billCassette20Input" type="number" step="1" placeholder="0">
+        </div>
+        <div class="field">
+          <label for="billCassette50Input">Cassetta 50 EUR</label>
+          <input id="billCassette50Input" type="number" step="1" placeholder="0">
+        </div>
+      </div>
+      <div class="btn-row" style="margin-top:10px;">
+        <button id="btnSaveBillRecycler" class="btn" type="button">Salva cassette banconote</button>
+      </div>
+      <details class="info">
+        <summary>Info</summary>
+        <div class="body">Inserisci manualmente il numero di banconote presenti nelle tre cassette recycler.</div>
+      </details>
+    </div>
+    <div class="card">
+      <h2>Modalita recycler MD100</h2>
+      <label class="checkbox-row">
+        <input id="billRecyclerUseInventoryCommand" type="checkbox">
+        Usa il comando inventory del recycler come valore prioritario
+      </label>
+      <div class="btn-row" style="margin-top:10px;">
+        <button id="btnSaveBillRecyclerMode" class="btn" type="button">Salva modalita recycler</button>
+      </div>
+      <details class="info">
+        <summary>Info</summary>
+        <div class="body">Se disattivato, il valore recycler MD100 viene calcolato solo dagli eventi di inserimento ed erogazione, ignorando il comando inventory.</div>
+      </details>
+    </div>
+    <div class="card">
+      <div id="actionStatus" class="status-text"></div>
+      <div class="btn-row">
+        <a class="btn secondary" href="/">Menu</a>
+        <a class="btn secondary" href="/status">Stato</a>
+      </div>
+    </div>
+  </main>
+  <script>
+    function s(v) { return (v === undefined || v === null) ? '' : String(v); }
+    let billRecyclerDirty = false;
+    function findRecyclerEntry(data) {
+      const list = (data && data.cctalk && Array.isArray(data.cctalk.recycler)) ? data.cctalk.recycler : [];
+      return list.length > 0 ? list[0] : null;
+    }
+    function setBillRecyclerInputs(entry) {
+      if (billRecyclerDirty) return;
+      const values = {
+        billCassette10Input: String(entry ? (Number(entry.count10 || 0)) : 0),
+        billCassette20Input: String(entry ? (Number(entry.count20 || 0)) : 0),
+        billCassette50Input: String(entry ? (Number(entry.count50 || 0)) : 0)
+      };
+      Object.entries(values).forEach(([id, value]) => {
+        const input = document.getElementById(id);
+        if (input && document.activeElement !== input) input.value = value;
+      });
+    }
+
+    let refreshInFlight = false;
+    async function refresh() {
+      if (refreshInFlight) return;
+      refreshInFlight = true;
+      try {
+        const data = await fetch('/api/status', { cache: 'no-store' }).then(r => r.json());
+        const wifi = data.wifi || {};
+        const ssid = s(wifi.ssid) || '-';
+        document.getElementById('wifiIndicator').textContent =
+          wifi.connected ? `WiFi connesso: ${ssid}` : `WiFi non connesso: ${ssid}`;
+
+        const econ = [];
+        econ.push(s(data.cctalk.formatted.line1));
+        econ.push(s(data.cctalk.formatted.line2));
+        econ.push(s(data.cctalk.formatted.line3));
+        econ.push(`ValoreMoneteIniziale: ${(data.cctalk.economic.coinLevelBaseCents / 100.0).toFixed(2)} EUR`);
+        econ.push(`ValoreMoneteAttuale: ${(data.cctalk.economic.coinCurrentCents / 100.0).toFixed(2)} EUR`);
+        for (const r of (data.cctalk.recycler || [])) {
+          econ.push(`BV[${r.addr}] RecyclerInventory: 10EUR=${r.count10} 20EUR=${r.count20} 50EUR=${r.count50}`);
+        }
+        document.getElementById('econ').textContent = econ.join('\n');
+
+        setBillRecyclerInputs(findRecyclerEntry(data));
+
+        const baseInput = document.getElementById('coinLevelInput');
+        if (baseInput && document.activeElement !== baseInput) {
+          baseInput.value = (data.cctalk.economic.coinLevelBaseCents / 100.0).toFixed(2);
+        }
+      } catch (e) {
+        document.getElementById('econ').textContent = 'Errore fetch /api/status';
+      } finally {
+        refreshInFlight = false;
+      }
+    }
+
+    async function loadRecyclerMode() {
+      try {
+        const data = await fetch('/api/settings', { cache: 'no-store' }).then(r => r.json());
+        const settings = data && data.settings ? data.settings : {};
+        document.getElementById('billRecyclerUseInventoryCommand').checked =
+          settings.billRecyclerUseInventoryCommand !== false;
+      } catch (e) {
+      }
+    }
 
     async function postJson(url, payload) {
       const r = await fetch(url, {
@@ -765,33 +882,42 @@ void WebServerService::handleStatusPage() {
       }
     });
 
+    document.getElementById('btnSaveBillRecyclerMode').addEventListener('click', async () => {
+      const status = document.getElementById('actionStatus');
+      const enabled = document.getElementById('billRecyclerUseInventoryCommand').checked;
+      status.textContent = 'Salvataggio modalita recycler in corso...';
+      try {
+        const body = new URLSearchParams();
+        body.set('billRecyclerUseInventoryCommand', enabled ? '1' : '0');
+        const r = await fetch('/api/bills/recycler/inventory-mode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: body.toString()
+        });
+        const res = await r.json();
+        status.textContent = res.ok ? `OK: ${s(res.message)}` : `Errore: ${s(res.message)}`;
+      } catch (e) {
+        status.textContent = 'Errore rete durante il salvataggio modalita recycler';
+      }
+    });
+
     ['billCassette10Input', 'billCassette20Input', 'billCassette50Input'].forEach((id) => {
       document.getElementById(id).addEventListener('input', () => { billRecyclerDirty = true; });
     });
+
+    refresh();
+    loadRecyclerMode();
+    setInterval(refresh, 5000);
   </script>
 </body>
 </html>
 )HTML";
-
-  String page(PAGE);
-  if (_uiMode == UI_MODE_PROG) {
-    page.replace("<!--PROG_MENU_BUTTON-->",
-      "<a class=\"btn secondary\" href=\"/settings\">Impostazioni</a>"
-      "<a class=\"btn secondary\" href=\"/\">Menu</a>");
-  } else {
-    page.replace("<!--PROG_MENU_BUTTON-->",
-      "<button class=\"btn warn\""
-      " onclick=\"this.disabled=true;this.textContent='Riavvio...';"
-      "fetch('/api/mode/prog',{method:'POST'})"
-      ".catch(()=>{this.disabled=false;this.textContent='Modalita PROG';})\""
-      ">Modalita PROG</button>");
-  }
-  _server.send(200, "text/html", page);
+  _server.send(200, "text/html", PAGE);
 }
 
 void WebServerService::handleSettingsPage() {
-  // Le impostazioni sono esposte solo in modalita PROG per ridurre il rischio
-  // di modifiche accidentali in esercizio normale.
+  // Hub impostazioni: solo i pulsanti verso le tre sotto-pagine dedicate, cosi
+  // ogni schermata resta corta e leggibile. Esposto solo in modalita PROG.
   if (_uiMode != UI_MODE_PROG) {
     _server.send(403, "text/plain", "Settings disponibili solo in modalita PROG");
     return;
@@ -809,6 +935,73 @@ void WebServerService::handleSettingsPage() {
 <body>
   <div class="appbar">
     <h1>Impostazioni</h1>
+    <div id="wifiIndicator" class="pill">WiFi: loading...</div>
+  </div>
+  <main>
+    <div class="card">
+      <h2>Sezioni</h2>
+      <div class="btn-row">
+        <a class="btn" href="/settings/wifi">WiFi</a>
+        <a class="btn" href="/settings/server">Configurazione server</a>
+        <a class="btn" href="/settings/peripherals">Impostazioni periferiche</a>
+      </div>
+    </div>
+    <div class="card">
+      <div class="btn-row">
+        <a class="btn secondary" href="/">Menu</a>
+        <a class="btn secondary" href="/status">Stato</a>
+      </div>
+      <div id="status" class="status-text"></div>
+    </div>
+  </main>
+  <script>
+    function s(v) { return (v === undefined || v === null) ? '' : String(v); }
+    let wifiIndicatorInFlight = false;
+    async function refreshWifiIndicator() {
+      if (wifiIndicatorInFlight) return;
+      wifiIndicatorInFlight = true;
+      try {
+        const data = await fetch('/api/status', { cache: 'no-store' }).then(r => r.json());
+        const ssid = s(data.wifi.ssid) || '-';
+        document.getElementById('wifiIndicator').textContent = data.wifi.connected
+          ? `WiFi connesso: ${ssid}`
+          : `WiFi non connesso: ${ssid}`;
+      } catch (e) {
+        document.getElementById('wifiIndicator').textContent = 'WiFi: stato non disponibile';
+      } finally {
+        wifiIndicatorInFlight = false;
+      }
+    }
+    refreshWifiIndicator();
+    setInterval(refreshWifiIndicator, 5000);
+  </script>
+</body>
+</html>
+)HTML";
+
+  _server.send(200, "text/html", PAGE);
+}
+
+void WebServerService::handleSettingsWifiPage() {
+  // Sotto-pagina WiFi: solo la card "Connessione rete". La logica e servita da
+  // /settings.js, condiviso con le altre sotto-pagine impostazioni.
+  if (_uiMode != UI_MODE_PROG) {
+    _server.send(403, "text/plain", "Settings disponibili solo in modalita PROG");
+    return;
+  }
+
+  static const char PAGE[] PROGMEM = R"HTML(
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>CcTalkMultiSniffer WiFi</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="appbar">
+    <h1>WiFi</h1>
     <div id="wifiIndicator" class="pill">WiFi: loading...</div>
   </div>
   <main>
@@ -844,6 +1037,47 @@ void WebServerService::handleSettingsPage() {
       <div id="networkSaveStatus" class="status-text"></div>
     </div>
 
+    <div class="card">
+      <div class="btn-row">
+        <a class="btn secondary" href="/settings">Impostazioni</a>
+        <a class="btn secondary" href="/">Menu</a>
+        <a class="btn secondary" href="/status">Stato</a>
+      </div>
+      <div id="status" class="status-text"></div>
+    </div>
+  </main>
+  <script defer src="/settings.js"></script>
+</body>
+</html>
+)HTML";
+
+  _server.send(200, "text/html", PAGE);
+}
+
+void WebServerService::handleSettingsServerPage() {
+  // Sotto-pagina server: card "Configurazione server" + "MQTT (EMQX)".
+  // Pagina aperta come HTML dall'app Flutter: ID campi ed endpoint /api/settings
+  // invariati rispetto alla vecchia pagina unica.
+  if (_uiMode != UI_MODE_PROG) {
+    _server.send(403, "text/plain", "Settings disponibili solo in modalita PROG");
+    return;
+  }
+
+  static const char PAGE[] PROGMEM = R"HTML(
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>CcTalkMultiSniffer Configurazione server</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="appbar">
+    <h1>Configurazione server</h1>
+    <div id="wifiIndicator" class="pill">WiFi: loading...</div>
+  </div>
+  <main>
     <div class="card section">
       <h3 class="section-title">Configurazione server</h3>
       <details class="info">
@@ -896,6 +1130,45 @@ void WebServerService::handleSettingsPage() {
       <div id="mqttSaveStatus" class="status-text"></div>
     </div>
 
+    <div class="card">
+      <div class="btn-row">
+        <a class="btn secondary" href="/settings">Impostazioni</a>
+        <a class="btn secondary" href="/">Menu</a>
+        <a class="btn secondary" href="/status">Stato</a>
+      </div>
+      <div id="status" class="status-text"></div>
+    </div>
+  </main>
+  <script defer src="/settings.js"></script>
+</body>
+</html>
+)HTML";
+
+  _server.send(200, "text/html", PAGE);
+}
+
+void WebServerService::handleSettingsPeripheralsPage() {
+  // Sotto-pagina periferiche: solo la card "Impostazioni periferiche".
+  if (_uiMode != UI_MODE_PROG) {
+    _server.send(403, "text/plain", "Settings disponibili solo in modalita PROG");
+    return;
+  }
+
+  static const char PAGE[] PROGMEM = R"HTML(
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>CcTalkMultiSniffer Impostazioni periferiche</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="appbar">
+    <h1>Impostazioni periferiche</h1>
+    <div id="wifiIndicator" class="pill">WiFi: loading...</div>
+  </div>
+  <main>
     <div class="card section">
       <h3 class="section-title">Impostazioni periferiche</h3>
       <div class="field">
@@ -929,6 +1202,14 @@ void WebServerService::handleSettingsPage() {
         <details class="info">
           <summary>Info</summary>
           <div class="body">Per gli hopper mono-moneta imposta il taglio fisso. Per i discriminatori multi-taglio imposta il valore dell'unita base monetaria usata dal device per convertire i conteggi type1/type2 in valore economico.</div>
+        </details>
+      </div>
+      <div class="field">
+        <label>Percorso sorter di esclusione (Alberici Evolution)</label>
+        <div id="hopperSorterExcludedPathGroup" class="mask-group"></div>
+        <details class="info">
+          <summary>Info</summary>
+          <div class="body">Solo per hopper impostati sul modello "Alberici Evolution" (sorter fino a 5 vie). Seleziona quale percorso sorter (osservato via 0xD2) va considerato di esclusione: le monete instradate su quel percorso non vengono contate nel totale monete; qualunque altro percorso conta come accettato.</div>
         </details>
       </div>
       <div class="field">
@@ -973,14 +1254,36 @@ void WebServerService::handleSettingsPage() {
 
     <div class="card">
       <div class="btn-row">
+        <a class="btn secondary" href="/settings">Impostazioni</a>
         <a class="btn secondary" href="/">Menu</a>
         <a class="btn secondary" href="/status">Stato</a>
       </div>
       <div id="status" class="status-text"></div>
     </div>
   </main>
-  <script>
+  <script defer src="/settings.js"></script>
+</body>
+</html>
+)HTML";
+
+  _server.send(200, "text/html", PAGE);
+}
+
+void WebServerService::handleSettingsJs() {
+  // Script condiviso da /settings/wifi, /settings/server e /settings/peripherals.
+  // Il bootstrap in fondo inizializza solo le sezioni presenti nel DOM della
+  // pagina corrente; il salvataggio invia sempre il set completo di parametri a
+  // /api/settings, prendendo i campi non visibili dallo snapshot caricato, cosi
+  // il backend resta invariato.
+  if (_uiMode != UI_MODE_PROG) {
+    _server.send(403, "application/javascript", "/* solo modalita PROG */");
+    return;
+  }
+
+  static const char SCRIPT[] PROGMEM = R"JS(
     const MANUAL_WIFI_VALUE = '__manual__';
+    let loadedSettings = {};
+    let settingsReady = false;
     let currentPeripheralCatalog = {
       presentCoinAcceptor: false,
       presentHopperMask: 0,
@@ -989,7 +1292,8 @@ void WebServerService::handleSettingsPage() {
       detectedDevices: [],
       coinAcceptorInEnabled: false,
       coinAcceptorFalconProfile: 1,
-      hopperCoinValueCents: []
+      hopperCoinValueCents: [],
+      hopperSorterExcludedPath: []
     };
     function s(v) { return (v === undefined || v === null) ? '' : String(v); }
 
@@ -1234,6 +1538,55 @@ void WebServerService::handleSettingsPage() {
       }
     }
 
+    function renderHopperSorterExcludedPathOptions(addresses, values) {
+      const container = document.getElementById('hopperSorterExcludedPathGroup');
+      if (!container) return;
+      container.innerHTML = '';
+      if (!addresses || addresses.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'hint';
+        empty.textContent = 'Nessun hopper Alberici Evolution selezionato';
+        container.appendChild(empty);
+        return;
+      }
+
+      for (const addr of addresses) {
+        const row = document.createElement('div');
+        row.className = 'device-item';
+
+        const meta = document.createElement('div');
+        meta.className = 'device-meta';
+        const title = document.createElement('div');
+        title.className = 'device-title';
+        title.textContent = `Hopper indirizzo ${addr}`;
+        meta.appendChild(title);
+        const note = document.createElement('div');
+        note.className = 'device-note';
+        note.textContent = 'Percorso sorter da escludere dal totale monete (0xD2). Attivo solo con filtro "Discriminatore"';
+        meta.appendChild(note);
+        row.appendChild(meta);
+
+        const select = document.createElement('select');
+        select.dataset.hopperSorterExcludedPathAddr = String(addr);
+        const options = [
+          { value: 1, label: 'Percorso 1' },
+          { value: 2, label: 'Percorso 2 (default)' },
+          { value: 3, label: 'Percorso 3' },
+          { value: 4, label: 'Percorso 4' },
+          { value: 5, label: 'Percorso 5' }
+        ];
+        for (const option of options) {
+          const opt = document.createElement('option');
+          opt.value = String(option.value);
+          opt.textContent = option.label;
+          select.appendChild(opt);
+        }
+        select.value = String(hopperCoinValueForAddr(values, addr) || 2);
+        row.appendChild(select);
+        container.appendChild(row);
+      }
+    }
+
     function renderCoinAcceptorInfo(present, enabled, falconProfile) {
       const container = document.getElementById('coinAcceptorInfo');
       if (!container) return;
@@ -1426,18 +1779,32 @@ void WebServerService::handleSettingsPage() {
       return out;
     }
 
+    function collectHopperSorterExcludedPath() {
+      const out = new Array(8).fill(0);
+      document.querySelectorAll('select[data-hopper-sorter-excluded-path-addr]').forEach((input) => {
+        const addr = Number(input.dataset.hopperSorterExcludedPathAddr);
+        const index = addr - 3;
+        if (index < 0 || index >= out.length) return;
+        out[index] = Number(input.value) || 0;
+      });
+      return out;
+    }
+
     function refreshRoutingAssignments(settings) {
       const hasCoinInInputs = document.querySelectorAll('input[data-mask-name="coinInHopperMask"]').length > 0;
       const hasCoinOutInputs = document.querySelectorAll('input[data-mask-name="coinOutHopperMask"]').length > 0;
       const hasBillInInputs = document.querySelectorAll('input[data-mask-name="billInValidatorMask"]').length > 0;
       const hasBillOutInputs = document.querySelectorAll('input[data-mask-name="billOutValidatorMask"]').length > 0;
       const hasHopperCoinValueInputs = document.querySelectorAll('select[data-hopper-coin-value-addr]').length > 0;
+      const hasHopperSorterExcludedPathInputs =
+        document.querySelectorAll('select[data-hopper-sorter-excluded-path-addr]').length > 0;
       const currentSelections = {
         coinInHopperMask: getMaskSelection('coinInHopperMask', 3),
         coinOutHopperMask: getMaskSelection('coinOutHopperMask', 3),
         billInValidatorMask: getMaskSelection('billInValidatorMask', 40),
         billOutValidatorMask: getMaskSelection('billOutValidatorMask', 40),
-        hopperCoinValueCents: collectHopperCoinValueCents()
+        hopperCoinValueCents: collectHopperCoinValueCents(),
+        hopperSorterExcludedPath: collectHopperSorterExcludedPath()
       };
       const coinCheckbox = document.getElementById('coinAcceptorInEnabled');
       const coinEnabled = coinCheckbox ? coinCheckbox.checked : !!settings.coinAcceptorInEnabled;
@@ -1447,6 +1814,8 @@ void WebServerService::handleSettingsPage() {
         : (Number(settings.coinAcceptorFalconProfile) || 1);
 
       const hopperAddrs = selectedAddressesForFamily('hopper');
+      // 5 = HOPPER_MODEL_ALBERICI_EVOLUTION (unico modello con sorter a piu vie).
+      const evolutionHopperAddrs = hopperAddrs.filter((addr) => selectedModelForAddress(addr) === 5);
       const billValidatorAddrs = selectedAddressesForFamily('bill_validator');
       const hasCoin = selectedModelForAddress(2) > 0;
 
@@ -1455,6 +1824,11 @@ void WebServerService::handleSettingsPage() {
       renderHopperCoinValueOptions(
         hopperAddrs,
         hasHopperCoinValueInputs ? currentSelections.hopperCoinValueCents : settings.hopperCoinValueCents);
+      renderHopperSorterExcludedPathOptions(
+        evolutionHopperAddrs,
+        hasHopperSorterExcludedPathInputs
+          ? currentSelections.hopperSorterExcludedPath
+          : settings.hopperSorterExcludedPath);
       renderMaskOptions('billInValidatorMaskGroup', 'billInValidatorMask', billValidatorAddrs, (addr) => `Bill Validator indirizzo ${addr}`);
       renderMaskOptions('billOutValidatorMaskGroup', 'billOutValidatorMask', billValidatorAddrs, (addr) => `Bill Validator indirizzo ${addr}`);
       renderCoinAcceptorInfo(hasCoin, coinEnabled, coinProfile);
@@ -1471,6 +1845,7 @@ void WebServerService::handleSettingsPage() {
         ? (Number(document.getElementById('coinAcceptorFalconProfile')?.value) || 1)
         : (Number(settings.coinAcceptorFalconProfile) || 1);
       currentPeripheralCatalog.hopperCoinValueCents = collectHopperCoinValueCents();
+      currentPeripheralCatalog.hopperSorterExcludedPath = collectHopperSorterExcludedPath();
       refreshUnusedPeripheralList(currentPeripheralCatalog);
     }
 
@@ -1506,10 +1881,22 @@ void WebServerService::handleSettingsPage() {
       }
     }
 
+    function setFieldValue(id, value) {
+      const el = document.getElementById(id);
+      if (el) el.value = value;
+    }
+    function setFieldChecked(id, checked) {
+      const el = document.getElementById(id);
+      if (el) el.checked = checked;
+    }
+
     async function loadSettings() {
       const r = await fetch('/api/settings', { cache: 'no-store' });
       const data = await r.json();
       const s = data.settings || {};
+      // Snapshot completo: le sotto-pagine che non mostrano una sezione la
+      // reinviano invariata al salvataggio prendendo i valori da qui.
+      loadedSettings = s;
       currentPeripheralCatalog = {
         presentCoinAcceptor: !!s.presentCoinAcceptor,
         coinAcceptorInEnabled: !!s.coinAcceptorInEnabled,
@@ -1518,91 +1905,159 @@ void WebServerService::handleSettingsPage() {
         presentBillValidatorMask: Number(s.presentBillValidatorMask) || 0,
         unknownDevicesCsv: s.unknownDevicesCsv || '',
         detectedDevices: Array.isArray(s.detectedDevices) ? s.detectedDevices : [],
-        hopperCoinValueCents: Array.isArray(s.hopperCoinValueCents) ? s.hopperCoinValueCents : new Array(8).fill(0)
+        hopperCoinValueCents: Array.isArray(s.hopperCoinValueCents) ? s.hopperCoinValueCents : new Array(8).fill(0),
+        hopperSorterExcludedPath: Array.isArray(s.hopperSorterExcludedPath) ? s.hopperSorterExcludedPath : new Array(8).fill(0)
       };
       renderDetectedDevices(currentPeripheralCatalog.detectedDevices);
-      document.getElementById('wifiPass').value = s.wifiPass || '';
-      document.getElementById('saveWifiCredentials').checked = !!s.saveWifiCredentials;
-      document.getElementById('serverUrl').value = s.serverUrl || '';
-      document.getElementById('locationCode').value = s.locationCode || '';
-      document.getElementById('apiKey').value = s.apiKey || '';
-      document.getElementById('mqttEnabled').checked = !!s.mqttEnabled;
-      document.getElementById('mqttBrokerHost').value = s.mqttBrokerHost || '';
-      document.getElementById('mqttBrokerPort').value = s.mqttBrokerPort || 1883;
-      document.getElementById('mqttUsername').value = s.mqttUsername || '';
-      document.getElementById('mqttPassword').value = s.mqttPassword || '';
-      document.getElementById('billRecyclerUseInventoryCommand').checked =
-        s.billRecyclerUseInventoryCommand !== false;
+      setFieldValue('wifiPass', s.wifiPass || '');
+      setFieldChecked('saveWifiCredentials', !!s.saveWifiCredentials);
+      setFieldValue('serverUrl', s.serverUrl || '');
+      setFieldValue('locationCode', s.locationCode || '');
+      setFieldValue('apiKey', s.apiKey || '');
+      setFieldChecked('mqttEnabled', !!s.mqttEnabled);
+      setFieldValue('mqttBrokerHost', s.mqttBrokerHost || '');
+      setFieldValue('mqttBrokerPort', s.mqttBrokerPort || 1883);
+      setFieldValue('mqttUsername', s.mqttUsername || '');
+      setFieldValue('mqttPassword', s.mqttPassword || '');
+      setFieldChecked('billRecyclerUseInventoryCommand', s.billRecyclerUseInventoryCommand !== false);
       refreshRoutingAssignments(s);
-      document.getElementById('status').textContent = data.ok ? 'Impostazioni caricate' : ('Errore: ' + (data.message || 'lettura'));
-      await loadWifiNetworks(s.wifiSsid || '');
+      settingsReady = true;
+      const statusEl = document.getElementById('status');
+      if (statusEl) statusEl.textContent = data.ok ? 'Impostazioni caricate' : ('Errore: ' + (data.message || 'lettura'));
+      if (document.getElementById('wifiSsidSelect')) {
+        await loadWifiNetworks(s.wifiSsid || '');
+      }
     }
 
     function buildSettingsParams() {
+      // Il backend ricostruisce l'intero AppSettings da questi parametri, quindi
+      // il POST deve sempre essere completo: i gruppi con UI assente vengono
+      // reinviati invariati dallo snapshot `loadedSettings`.
       const params = new URLSearchParams();
-      const hopperModel1Mask = buildModelMask('hopper', 1, 3);
-      const hopperModel2Mask = buildModelMask('hopper', 2, 3);
-      const hopperModel3Mask = buildModelMask('hopper', 3, 3);
-      const hopperModel4Mask = buildModelMask('hopper', 4, 3);
-      const hopperModel5Mask = buildModelMask('hopper', 5, 3);
-      const billValidatorModel1Mask = buildModelMask('bill_validator', 1, 40);
-      const billValidatorModel2Mask = buildModelMask('bill_validator', 2, 40);
-      const billValidatorModel3Mask = buildModelMask('bill_validator', 3, 40);
-      params.set('wifiSsid', selectedWifiSsid());
-      params.set('wifiPass', document.getElementById('wifiPass').value);
-      params.set('saveWifiCredentials', document.getElementById('saveWifiCredentials').checked ? '1' : '0');
-      params.set('serverUrl', document.getElementById('serverUrl').value);
-      params.set('locationCode', document.getElementById('locationCode').value);
-      params.set('apiKey', document.getElementById('apiKey').value);
-      params.set('mqttEnabled', document.getElementById('mqttEnabled').checked ? '1' : '0');
-      params.set('mqttBrokerHost', document.getElementById('mqttBrokerHost').value);
-      params.set('mqttBrokerPort', document.getElementById('mqttBrokerPort').value);
-      params.set('mqttUsername', document.getElementById('mqttUsername').value);
-      params.set('mqttPassword', document.getElementById('mqttPassword').value);
-      params.set('billRecyclerUseInventoryCommand',
-        document.getElementById('billRecyclerUseInventoryCommand').checked ? '1' : '0');
-      params.set('hopperAlbericiDiscriminatorMask', hopperModel1Mask);
-      params.set('hopperAlbericiHopperCdMask', hopperModel2Mask);
-      params.set('hopperSuzoEvolutionMask', hopperModel3Mask);
-      params.set('hopperAzkoyenDiscriminatorMask', hopperModel4Mask);
-      params.set('hopperAlbericiEvolutionMask', hopperModel5Mask);
-      params.set('billValidatorMd100Mask', billValidatorModel1Mask);
-      params.set('billValidatorSmartPayoutMask', billValidatorModel2Mask);
-      params.set('billValidatorIproMask', billValidatorModel3Mask);
-      params.set('hopperModel',
-        hopperModel4Mask !== '0' && hopperModel1Mask === '0' && hopperModel2Mask === '0' && hopperModel3Mask === '0' && hopperModel5Mask === '0'
-          ? '4'
-          : (hopperModel5Mask !== '0' && hopperModel1Mask === '0' && hopperModel2Mask === '0' && hopperModel3Mask === '0'
-            ? '5'
-            : (hopperModel3Mask !== '0' && hopperModel1Mask === '0' && hopperModel2Mask === '0'
-              ? '3'
-              : (hopperModel2Mask !== '0' && hopperModel1Mask === '0' ? '2' : '1'))));
-      params.set('billValidatorModel',
-        billValidatorModel3Mask !== '0' && billValidatorModel1Mask === '0' && billValidatorModel2Mask === '0'
-          ? '3'
-          : (billValidatorModel2Mask !== '0' && billValidatorModel1Mask === '0' ? '2' : '1'));
-      const coinAcceptorCheckbox = document.getElementById('coinAcceptorInEnabled');
-      params.set('coinAcceptorInEnabled',
-        (coinAcceptorCheckbox ? coinAcceptorCheckbox.checked : !!currentPeripheralCatalog.coinAcceptorInEnabled) ? '1' : '0');
-      const coinAcceptorProfileSelect = document.getElementById('coinAcceptorFalconProfile');
-      params.set('coinAcceptorFalconProfile',
-        String(coinAcceptorProfileSelect
-          ? (Number(coinAcceptorProfileSelect.value) || 1)
-          : (Number(currentPeripheralCatalog.coinAcceptorFalconProfile) || 1)));
-      params.set('coinInHopperMask', getMaskSelection('coinInHopperMask', 3));
-      params.set('coinOutHopperMask', getMaskSelection('coinOutHopperMask', 3));
-      const hopperCoinValues = collectHopperCoinValueCents();
-      for (let addr = 3; addr <= 10; addr++) {
-        const index = addr - 3;
-        params.set(`hopperCoinValueCents${addr}`, String(Number(hopperCoinValues[index]) || 0));
+      const L = loadedSettings || {};
+      const hasWifi = !!document.getElementById('wifiSsidSelect');
+      const hasServer = !!document.getElementById('serverUrl');
+      const hasMqtt = !!document.getElementById('mqttEnabled');
+      const hasPeripherals = !!document.getElementById('detectedDevicesList');
+
+      if (hasWifi) {
+        params.set('wifiSsid', selectedWifiSsid());
+        params.set('wifiPass', document.getElementById('wifiPass').value);
+        params.set('saveWifiCredentials', document.getElementById('saveWifiCredentials').checked ? '1' : '0');
+      } else {
+        params.set('wifiSsid', s(L.wifiSsid));
+        params.set('wifiPass', s(L.wifiPass));
+        params.set('saveWifiCredentials', L.saveWifiCredentials ? '1' : '0');
       }
-      params.set('billInValidatorMask', getMaskSelection('billInValidatorMask', 40));
-      params.set('billOutValidatorMask', getMaskSelection('billOutValidatorMask', 40));
+
+      if (hasServer) {
+        params.set('serverUrl', document.getElementById('serverUrl').value);
+        params.set('locationCode', document.getElementById('locationCode').value);
+        params.set('apiKey', document.getElementById('apiKey').value);
+      } else {
+        params.set('serverUrl', s(L.serverUrl));
+        params.set('locationCode', s(L.locationCode));
+        params.set('apiKey', s(L.apiKey));
+      }
+
+      if (hasMqtt) {
+        params.set('mqttEnabled', document.getElementById('mqttEnabled').checked ? '1' : '0');
+        params.set('mqttBrokerHost', document.getElementById('mqttBrokerHost').value);
+        params.set('mqttBrokerPort', document.getElementById('mqttBrokerPort').value);
+        params.set('mqttUsername', document.getElementById('mqttUsername').value);
+        params.set('mqttPassword', document.getElementById('mqttPassword').value);
+      } else {
+        params.set('mqttEnabled', L.mqttEnabled ? '1' : '0');
+        params.set('mqttBrokerHost', s(L.mqttBrokerHost));
+        params.set('mqttBrokerPort', String(Number(L.mqttBrokerPort) || 1883));
+        params.set('mqttUsername', s(L.mqttUsername));
+        params.set('mqttPassword', s(L.mqttPassword));
+      }
+
+      if (hasPeripherals) {
+        const hopperModel1Mask = buildModelMask('hopper', 1, 3);
+        const hopperModel2Mask = buildModelMask('hopper', 2, 3);
+        const hopperModel3Mask = buildModelMask('hopper', 3, 3);
+        const hopperModel4Mask = buildModelMask('hopper', 4, 3);
+        const hopperModel5Mask = buildModelMask('hopper', 5, 3);
+        const billValidatorModel1Mask = buildModelMask('bill_validator', 1, 40);
+        const billValidatorModel2Mask = buildModelMask('bill_validator', 2, 40);
+        const billValidatorModel3Mask = buildModelMask('bill_validator', 3, 40);
+        params.set('billRecyclerUseInventoryCommand',
+          document.getElementById('billRecyclerUseInventoryCommand').checked ? '1' : '0');
+        params.set('hopperAlbericiDiscriminatorMask', hopperModel1Mask);
+        params.set('hopperAlbericiHopperCdMask', hopperModel2Mask);
+        params.set('hopperSuzoEvolutionMask', hopperModel3Mask);
+        params.set('hopperAzkoyenDiscriminatorMask', hopperModel4Mask);
+        params.set('hopperAlbericiEvolutionMask', hopperModel5Mask);
+        params.set('billValidatorMd100Mask', billValidatorModel1Mask);
+        params.set('billValidatorSmartPayoutMask', billValidatorModel2Mask);
+        params.set('billValidatorIproMask', billValidatorModel3Mask);
+        params.set('hopperModel',
+          hopperModel4Mask !== '0' && hopperModel1Mask === '0' && hopperModel2Mask === '0' && hopperModel3Mask === '0' && hopperModel5Mask === '0'
+            ? '4'
+            : (hopperModel5Mask !== '0' && hopperModel1Mask === '0' && hopperModel2Mask === '0' && hopperModel3Mask === '0'
+              ? '5'
+              : (hopperModel3Mask !== '0' && hopperModel1Mask === '0' && hopperModel2Mask === '0'
+                ? '3'
+                : (hopperModel2Mask !== '0' && hopperModel1Mask === '0' ? '2' : '1'))));
+        params.set('billValidatorModel',
+          billValidatorModel3Mask !== '0' && billValidatorModel1Mask === '0' && billValidatorModel2Mask === '0'
+            ? '3'
+            : (billValidatorModel2Mask !== '0' && billValidatorModel1Mask === '0' ? '2' : '1'));
+        const coinAcceptorCheckbox = document.getElementById('coinAcceptorInEnabled');
+        params.set('coinAcceptorInEnabled',
+          (coinAcceptorCheckbox ? coinAcceptorCheckbox.checked : !!currentPeripheralCatalog.coinAcceptorInEnabled) ? '1' : '0');
+        const coinAcceptorProfileSelect = document.getElementById('coinAcceptorFalconProfile');
+        params.set('coinAcceptorFalconProfile',
+          String(coinAcceptorProfileSelect
+            ? (Number(coinAcceptorProfileSelect.value) || 1)
+            : (Number(currentPeripheralCatalog.coinAcceptorFalconProfile) || 1)));
+        params.set('coinInHopperMask', getMaskSelection('coinInHopperMask', 3));
+        params.set('coinOutHopperMask', getMaskSelection('coinOutHopperMask', 3));
+        const hopperCoinValues = collectHopperCoinValueCents();
+        const hopperSorterExcludedPaths = collectHopperSorterExcludedPath();
+        for (let addr = 3; addr <= 10; addr++) {
+          const index = addr - 3;
+          params.set(`hopperCoinValueCents${addr}`, String(Number(hopperCoinValues[index]) || 0));
+          params.set(`hopperSorterExcludedPath${addr}`, String(Number(hopperSorterExcludedPaths[index]) || 0));
+        }
+        params.set('billInValidatorMask', getMaskSelection('billInValidatorMask', 40));
+        params.set('billOutValidatorMask', getMaskSelection('billOutValidatorMask', 40));
+      } else {
+        const coinValues = Array.isArray(L.hopperCoinValueCents) ? L.hopperCoinValueCents : [];
+        const sorterExcludedPaths = Array.isArray(L.hopperSorterExcludedPath) ? L.hopperSorterExcludedPath : [];
+        params.set('billRecyclerUseInventoryCommand', L.billRecyclerUseInventoryCommand === false ? '0' : '1');
+        params.set('hopperAlbericiDiscriminatorMask', String(Number(L.hopperAlbericiDiscriminatorMask) || 0));
+        params.set('hopperAlbericiHopperCdMask', String(Number(L.hopperAlbericiHopperCdMask) || 0));
+        params.set('hopperSuzoEvolutionMask', String(Number(L.hopperSuzoEvolutionMask) || 0));
+        params.set('hopperAzkoyenDiscriminatorMask', String(Number(L.hopperAzkoyenDiscriminatorMask) || 0));
+        params.set('hopperAlbericiEvolutionMask', String(Number(L.hopperAlbericiEvolutionMask) || 0));
+        params.set('billValidatorMd100Mask', String(Number(L.billValidatorMd100Mask) || 0));
+        params.set('billValidatorSmartPayoutMask', String(Number(L.billValidatorSmartPayoutMask) || 0));
+        params.set('billValidatorIproMask', String(Number(L.billValidatorIproMask) || 0));
+        params.set('hopperModel', String(Number(L.hopperModel) || 1));
+        params.set('billValidatorModel', String(Number(L.billValidatorModel) || 1));
+        params.set('coinAcceptorInEnabled', L.coinAcceptorInEnabled ? '1' : '0');
+        params.set('coinAcceptorFalconProfile', String(Number(L.coinAcceptorFalconProfile) || 1));
+        params.set('coinInHopperMask', String(Number(L.coinInHopperMask) || 0));
+        params.set('coinOutHopperMask', String(Number(L.coinOutHopperMask) || 0));
+        for (let addr = 3; addr <= 10; addr++) {
+          params.set(`hopperCoinValueCents${addr}`, String(Number(coinValues[addr - 3]) || 0));
+          params.set(`hopperSorterExcludedPath${addr}`, String(Number(sorterExcludedPaths[addr - 3]) || 0));
+        }
+        params.set('billInValidatorMask', String(Number(L.billInValidatorMask) || 0));
+        params.set('billOutValidatorMask', String(Number(L.billOutValidatorMask) || 0));
+      }
       return params;
     }
 
     async function saveSettings(statusElId) {
       const targetEl = document.getElementById(statusElId || 'status');
+      if (!settingsReady) {
+        if (targetEl) targetEl.textContent = 'Attendi il caricamento delle impostazioni...';
+        return;
+      }
       if (targetEl) targetEl.textContent = 'Salvataggio in corso...';
       const params = buildSettingsParams();
       const r = await fetch('/api/settings', {
@@ -1613,11 +2068,16 @@ void WebServerService::handleSettingsPage() {
       const data = await r.json();
       const message = data.ok ? ('OK: ' + data.message) : ('Errore: ' + data.message);
       if (targetEl) targetEl.textContent = message;
-      if (targetEl && targetEl.id !== 'status') document.getElementById('status').textContent = message;
+      const globalStatus = document.getElementById('status');
+      if (globalStatus && targetEl && targetEl.id !== 'status') globalStatus.textContent = message;
     }
 
     async function testConnection() {
       const status = document.getElementById('status');
+      if (!settingsReady) {
+        if (status) status.textContent = 'Attendi il caricamento delle impostazioni...';
+        return;
+      }
       status.textContent = 'Test connessione in corso...';
       const params = buildSettingsParams();
       const r = await fetch('/api/settings/testconnection', {
@@ -1649,9 +2109,12 @@ void WebServerService::handleSettingsPage() {
     }
 
     function wireSectionSave(buttonId, statusElId) {
-      document.getElementById(buttonId).addEventListener('click', () => {
+      const btn = document.getElementById(buttonId);
+      if (!btn) return;
+      btn.addEventListener('click', () => {
         saveSettings(statusElId).catch(() => {
-          document.getElementById(statusElId).textContent = 'Errore rete durante salvataggio';
+          const el = document.getElementById(statusElId);
+          if (el) el.textContent = 'Errore rete durante salvataggio';
         });
       });
     }
@@ -1660,68 +2123,83 @@ void WebServerService::handleSettingsPage() {
     wireSectionSave('btnSaveMqtt', 'mqttSaveStatus');
     wireSectionSave('btnSavePeripherals', 'peripheralsSaveStatus');
 
-    document.getElementById('btnScanWifi').addEventListener('click', () => {
-      loadWifiNetworks(selectedWifiSsid()).catch(() => {
-        wifiStatus().textContent = 'Errore durante la scansione WiFi';
-      });
-    });
-    document.getElementById('btnTestWifi').addEventListener('click', () => {
-      testWifi().catch(() => {
-        document.getElementById('wifiTestStatus').textContent = 'Errore rete durante il test WiFi';
-      });
-    });
-    document.getElementById('btnTestConnection').addEventListener('click', () => {
-      testConnection().catch(() => {
-        document.getElementById('status').textContent = 'Errore rete durante il test di connessione';
-      });
-    });
+    const hasWifiSection = !!document.getElementById('wifiSsidSelect');
+    const hasServerSection = !!document.getElementById('serverUrl');
+    const hasMqttSection = !!document.getElementById('mqttEnabled');
+    const hasPeripheralsSection = !!document.getElementById('detectedDevicesList');
 
-    wifiSelect().addEventListener('change', syncWifiManualVisibility);
-    document.addEventListener('change', (event) => {
-      const target = event.target;
-      if (!target) return;
-      if (target.dataset && target.dataset.deviceFamily) {
-        const addr = Number(target.dataset.deviceAddr);
-        currentPeripheralCatalog.detectedDevices = currentPeripheralCatalog.detectedDevices.map((device) =>
-          Number(device.addr) === addr
-            ? { ...device, selectedModel: Number(target.value) || 0 }
-            : device);
-        refreshRoutingAssignments(currentPeripheralCatalog);
-        return;
-      }
-      if (target.id === 'coinAcceptorInEnabled') {
+    if (hasWifiSection) {
+      document.getElementById('btnScanWifi').addEventListener('click', () => {
+        loadWifiNetworks(selectedWifiSsid()).catch(() => {
+          wifiStatus().textContent = 'Errore durante la scansione WiFi';
+        });
+      });
+      document.getElementById('btnTestWifi').addEventListener('click', () => {
+        testWifi().catch(() => {
+          document.getElementById('wifiTestStatus').textContent = 'Errore rete durante il test WiFi';
+        });
+      });
+      wifiSelect().addEventListener('change', syncWifiManualVisibility);
+      ensureWifiOption(MANUAL_WIFI_VALUE, 'Rete nascosta / inserimento manuale');
+      syncWifiManualVisibility();
+      initSecretToggle('wifiPass', 'toggleWifiPass');
+    }
+
+    if (hasServerSection) {
+      initSecretToggle('apiKey', 'toggleApiKey');
+    }
+
+    if (hasMqttSection) {
+      initSecretToggle('mqttPassword', 'toggleMqttPassword');
+      document.getElementById('btnTestConnection').addEventListener('click', () => {
+        testConnection().catch(() => {
+          document.getElementById('status').textContent = 'Errore rete durante il test di connessione';
+        });
+      });
+    }
+
+    if (hasPeripheralsSection) {
+      document.addEventListener('change', (event) => {
+        const target = event.target;
+        if (!target) return;
+        if (target.dataset && target.dataset.deviceFamily) {
+          const addr = Number(target.dataset.deviceAddr);
+          currentPeripheralCatalog.detectedDevices = currentPeripheralCatalog.detectedDevices.map((device) =>
+            Number(device.addr) === addr
+              ? { ...device, selectedModel: Number(target.value) || 0 }
+              : device);
+          refreshRoutingAssignments(currentPeripheralCatalog);
+          return;
+        }
+        if (target.id === 'coinAcceptorInEnabled') {
+          refreshUnusedPeripheralList(currentPeripheralCatalog);
+          return;
+        }
+        if (!target.dataset || !target.dataset.maskName) return;
+        syncExclusiveHopperSelection(target);
         refreshUnusedPeripheralList(currentPeripheralCatalog);
-        return;
-      }
-      if (!target.dataset || !target.dataset.maskName) return;
-      syncExclusiveHopperSelection(target);
+      });
+      renderMaskOptions('coinInHopperMaskGroup', 'coinInHopperMask', [], (addr) => `Hopper indirizzo ${addr}`);
+      renderMaskOptions('coinOutHopperMaskGroup', 'coinOutHopperMask', [], (addr) => `Hopper indirizzo ${addr}`);
+      renderHopperCoinValueOptions([], []);
+      renderHopperSorterExcludedPathOptions([], []);
+      renderMaskOptions('billInValidatorMaskGroup', 'billInValidatorMask', [], (addr) => `Bill Validator indirizzo ${addr}`);
+      renderMaskOptions('billOutValidatorMaskGroup', 'billOutValidatorMask', [], (addr) => `Bill Validator indirizzo ${addr}`);
+      renderDetectedDevices([]);
+      renderCoinAcceptorInfo(false, false);
       refreshUnusedPeripheralList(currentPeripheralCatalog);
-    });
-    renderMaskOptions('coinInHopperMaskGroup', 'coinInHopperMask', [], (addr) => `Hopper indirizzo ${addr}`);
-    renderMaskOptions('coinOutHopperMaskGroup', 'coinOutHopperMask', [], (addr) => `Hopper indirizzo ${addr}`);
-    renderHopperCoinValueOptions([], []);
-    renderMaskOptions('billInValidatorMaskGroup', 'billInValidatorMask', [], (addr) => `Bill Validator indirizzo ${addr}`);
-    renderMaskOptions('billOutValidatorMaskGroup', 'billOutValidatorMask', [], (addr) => `Bill Validator indirizzo ${addr}`);
-    renderDetectedDevices([]);
-    renderCoinAcceptorInfo(false, false);
-    refreshUnusedPeripheralList(currentPeripheralCatalog);
-    ensureWifiOption(MANUAL_WIFI_VALUE, 'Rete nascosta / inserimento manuale');
-    syncWifiManualVisibility();
-    initSecretToggle('wifiPass', 'toggleWifiPass');
-    initSecretToggle('apiKey', 'toggleApiKey');
-    initSecretToggle('mqttPassword', 'toggleMqttPassword');
+    }
 
     loadSettings().catch(() => {
-      document.getElementById('status').textContent = 'Errore rete durante caricamento';
+      const st = document.getElementById('status');
+      if (st) st.textContent = 'Errore rete durante caricamento';
     });
     refreshWifiIndicator();
     setInterval(refreshWifiIndicator, 5000);
-  </script>
-</body>
-</html>
-)HTML";
+)JS";
 
-  _server.send(200, "text/html", PAGE);
+  _server.sendHeader("Cache-Control", "public, max-age=600");
+  _server.send(200, "application/javascript", SCRIPT);
 }
 
 void WebServerService::handleHealth() {
@@ -2155,6 +2633,25 @@ void WebServerService::appendSettingsJson(String& out,
   out += String((unsigned)settings.hopperModel);
   out += ",\"billValidatorModel\":";
   out += String((unsigned)settings.billValidatorModel);
+  // Maschere di assegnazione modello per singolo indirizzo: servono alle
+  // sotto-pagine impostazioni che non mostrano la sezione periferiche per
+  // re-inviare invariata la configurazione durante un salvataggio.
+  out += ",\"hopperAlbericiDiscriminatorMask\":";
+  out += String((unsigned)settings.hopperAlbericiDiscriminatorMask);
+  out += ",\"hopperAlbericiHopperCdMask\":";
+  out += String((unsigned)settings.hopperAlbericiHopperCdMask);
+  out += ",\"hopperSuzoEvolutionMask\":";
+  out += String((unsigned)settings.hopperSuzoEvolutionMask);
+  out += ",\"hopperAzkoyenDiscriminatorMask\":";
+  out += String((unsigned)settings.hopperAzkoyenDiscriminatorMask);
+  out += ",\"hopperAlbericiEvolutionMask\":";
+  out += String((unsigned)settings.hopperAlbericiEvolutionMask);
+  out += ",\"billValidatorMd100Mask\":";
+  out += String((unsigned)settings.billValidatorMd100Mask);
+  out += ",\"billValidatorSmartPayoutMask\":";
+  out += String((unsigned)settings.billValidatorSmartPayoutMask);
+  out += ",\"billValidatorIproMask\":";
+  out += String((unsigned)settings.billValidatorIproMask);
   out += ",\"coinAcceptorInEnabled\":";
   out += (settings.coinAcceptorInEnabled ? "true" : "false");
   out += ",\"coinAcceptorFalconProfile\":";
@@ -2167,6 +2664,12 @@ void WebServerService::appendSettingsJson(String& out,
   for (uint8_t i = 0; i < kHopperAddressCount; i++) {
     if (i > 0) out += ",";
     out += String((unsigned)settings.hopperCoinValueCents[i]);
+  }
+  out += "]";
+  out += ",\"hopperSorterExcludedPath\":[";
+  for (uint8_t i = 0; i < kHopperAddressCount; i++) {
+    if (i > 0) out += ",";
+    out += String((unsigned)settings.hopperSorterExcludedPath[i]);
   }
   out += "]";
   out += ",\"billInValidatorMask\":";
@@ -2402,6 +2905,23 @@ bool WebServerService::parseSettingsFromRequest(AppSettings& out, String& messag
     const uint8_t idx = hopperAddressIndex(addr);
     if (idx < kHopperAddressCount) {
       out.hopperCoinValueCents[idx] = (uint16_t)hopperCoinValueCents;
+    }
+  }
+
+  for (uint8_t addr = kHopperAddressMin; addr <= kHopperAddressMax; addr++) {
+    char argName[24] = {0};
+    snprintf(argName, sizeof(argName), "hopperSorterExcludedPath%u", (unsigned)addr);
+    unsigned long sorterExcludedPath = 0;
+    if (_server.hasArg(argName)) {
+      if (!parseUnsignedLongStrict(_server.arg(argName), sorterExcludedPath) ||
+          (sorterExcludedPath != 0 && sorterExcludedPath > 5UL)) {
+        message = String(argName) + " non valido";
+        return false;
+      }
+    }
+    const uint8_t idx = hopperAddressIndex(addr);
+    if (idx < kHopperAddressCount) {
+      out.hopperSorterExcludedPath[idx] = (uint8_t)sorterExcludedPath;
     }
   }
 

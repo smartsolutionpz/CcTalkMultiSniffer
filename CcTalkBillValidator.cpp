@@ -229,6 +229,11 @@ void CcTalkBillValidator::updateState(const CcTalkTransaction& t) {
         state->lastStatusPayloadLen = 0;
         state->pendingAcceptedRouteValid = false;
         state->pendingAcceptedRouteEuro = 0;
+        // Dopo un reset l'iPRO ripubblica i conteggi recycler da zero: azzeriamo
+        // la baseline grezza per non contare la ri-lettura come banconote in uscita.
+        state->iproRecycleBoxCountValid = false;
+        state->iproRecycleBoxCount[0] = 0;
+        state->iproRecycleBoxCount[1] = 0;
         return;
 
       case 0x99:
@@ -550,6 +555,11 @@ const __FlashStringHelper* CcTalkBillValidator::cmdDesc(uint8_t hdr) const {
     case 0x1A:
       if (_dataset.recyclerInventoryMode == BILL_VALIDATOR_RECYCLER_INVENTORY_NOTE_AMOUNT) {
         return F("get note amount (026/1A)");
+      }
+      return CcTalkMaster::headerDesc(hdr);
+    case 0x1C:
+      if (_dataset.recyclerInventoryMode == BILL_VALIDATOR_RECYCLER_INVENTORY_IPRO_BOX_COUNT) {
+        return F("dispense bills (028/1C)");
       }
       return CcTalkMaster::headerDesc(hdr);
     case 0x1D:
@@ -1226,6 +1236,25 @@ bool CcTalkBillValidator::applyIproRecyclerCurrent(BillValidatorState& state,
   const uint16_t countBox2 = readU16LE(&data[2]);
   const uint8_t euros[2] = {state.iproRecycleBoxEuro[0], state.iproRecycleBoxEuro[1]};
   const uint16_t counts[2] = {countBox1, countBox2};
+
+  // Banconote in uscita: l'iPRO non espone un comando di payout osservabile con
+  // un valore economico diretto, quindi la dispensazione dal recycler si deduce
+  // dal calo del conteggio grezzo per box fra due letture 0x24 consecutive.
+  // Un aumento corrisponde a note immagazzinate e non va trattato come uscita.
+  if (state.iproRecycleBoxCountValid) {
+    for (uint8_t i = 0; i < 2; i++) {
+      if (counts[i] >= state.iproRecycleBoxCount[i]) continue;
+      const uint16_t dropped = (uint16_t)(state.iproRecycleBoxCount[i] - counts[i]);
+      const uint8_t euro = euros[i];
+      if (euro == 0) continue;
+      state.dispensedTotalEuro += (uint32_t)dropped * (uint32_t)euro;
+      state.lastDispensedValid = true;
+      state.lastDispensedEuro = euro;
+    }
+  }
+  state.iproRecycleBoxCount[0] = countBox1;
+  state.iproRecycleBoxCount[1] = countBox2;
+  state.iproRecycleBoxCountValid = true;
 
   for (uint8_t i = 0; i < 2; i++) {
     switch (euros[i]) {

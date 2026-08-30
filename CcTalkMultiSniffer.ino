@@ -1150,6 +1150,11 @@ static void applyConfiguredHopperCoinValues(const ccms::AppSettings& settings) {
     g_hopperAlbericiEvolution.setConfiguredCoinValueCents(addr, valueCents);
     g_hopperAzkoyenDiscriminator.setConfiguredCoinValueCents(addr, valueCents);
     g_hopperSuzoEvolution.setConfiguredCoinValueCents(addr, valueCents);
+    // Il percorso sorter di esclusione (fino a 5 vie) e specifico dei modelli
+    // con sorter: al momento solo l'Alberici Evolution lo usa.
+    const uint8_t excludedSorterPath =
+        (idx < ccms::kHopperAddressCount) ? settings.hopperSorterExcludedPath[idx] : 0;
+    g_hopperAlbericiEvolution.setConfiguredExcludedSorterPath(addr, excludedSorterPath);
   }
 }
 

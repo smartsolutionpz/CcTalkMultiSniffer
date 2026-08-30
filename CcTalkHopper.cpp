@@ -49,6 +49,11 @@ void CcTalkHopper::setConfiguredCoinValueCents(uint8_t addr, uint16_t valueCents
   _configuredCoinValueCents[(uint8_t)(addr - kAddrMin)] = valueCents;
 }
 
+void CcTalkHopper::setConfiguredExcludedSorterPath(uint8_t addr, uint8_t path) {
+  if (addr < kAddrMin || addr > kAddrMax) return;
+  _configuredExcludedSorterPath[(uint8_t)(addr - kAddrMin)] = path;
+}
+
 void CcTalkHopper::resetState() {
   // Inizializzazione deterministica degli slot hopper 3..10.
   memset(_states, 0, sizeof(_states));
@@ -969,6 +974,14 @@ uint16_t CcTalkHopper::configuredCoinValueCents(uint8_t addr) const {
   return _configuredCoinValueCents[(uint8_t)(addr - kAddrMin)];
 }
 
+uint8_t CcTalkHopper::configuredExcludedSorterPath(uint8_t addr) const {
+  if (addr >= kAddrMin && addr <= kAddrMax) {
+    const uint8_t configured = _configuredExcludedSorterPath[(uint8_t)(addr - kAddrMin)];
+    if (configured >= 1 && configured <= 5) return configured;
+  }
+  return kDefaultExcludedSorterPath;
+}
+
 uint16_t CcTalkHopper::azkoyenBaseCoinValueCents(const HopperState& state) const {
   const uint16_t configured = configuredCoinValueCents(state.addr);
   // Il codice "combo 1e/2e" non e un valore moneta singolo utilizzabile qui.
@@ -1050,17 +1063,18 @@ bool CcTalkHopper::coinValueAccepted(const HopperState& state, uint16_t valueCen
 
   // "Discriminatore" (default, configured == 0): il totale segue il
   // percorso sorter osservato dal vivo (0xD2, confermato ACK, correlato al
-  // taglio tramite la coin table) PER QUESTO SPECIFICO INDIRIZZO. Per spec
-  // ccTalk il default di fabbrica/dopo reset di ogni posizione e gia path 1
-  // ("accettata") finche il master non lo cambia esplicitamente; quindi
-  // l'assenza di un 0xD2 osservato per questa posizione/indirizzo (tipico
-  // di un hopper usato solo per l'erogazione, senza sorter in gioco) non
-  // deve escludere la moneta: va trattata come accettata, come da default
-  // di protocollo. Si esclude SOLO quando e stato osservato esplicitamente
-  // un percorso diverso da 1 per quel taglio su questo stesso indirizzo.
+  // taglio tramite la coin table) PER QUESTO SPECIFICO INDIRIZZO. Il sorter
+  // Evolution puo avere fino a 5 vie; l'unico percorso che esclude dal
+  // totale e quello configurato dall'utente (setConfiguredExcludedSorterPath,
+  // default storico 2) — qualunque altro percorso osservato conta come
+  // accettato. Per spec ccTalk il default di fabbrica/dopo reset di ogni
+  // posizione e gia path 1 ("accettata") finche il master non lo cambia
+  // esplicitamente; quindi l'assenza di un 0xD2 osservato per questa
+  // posizione/indirizzo (tipico di un hopper usato solo per l'erogazione,
+  // senza sorter in gioco) non deve escludere la moneta.
   const int8_t pos = findCoinPositionByValue(state, valueCents);
   const uint8_t path = (pos >= 0) ? state.coinSorterPath[pos] : 0;
-  const bool accepted = (path == 0 || path == 1);
+  const bool accepted = (path == 0) || (path != configuredExcludedSorterPath(state.addr));
   reason = accepted ? COIN_FILTER_REASON_NONE : COIN_FILTER_REASON_SORTER;
   return accepted;
 }
@@ -1653,7 +1667,9 @@ void CcTalkHopper::printResponse(Stream& out, uint8_t hostHdr, const CcTalkFrame
             out.print(F(") motivo="));
             switch (state->lastExclusionReason) {
               case COIN_FILTER_REASON_SORTER:
-                out.println(F("sorter (0xD2: percorso <> 1)"));
+                out.print(F("sorter (0xD2: percorso di esclusione="));
+                out.print(configuredExcludedSorterPath(state->addr));
+                out.println(')');
                 break;
               case COIN_FILTER_REASON_MANUAL_FILTER:
                 out.println(F("filtro monete configurato"));

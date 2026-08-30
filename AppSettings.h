@@ -142,6 +142,9 @@ static const uint8_t kHopperAddressCount = (uint8_t)(kHopperAddressMax - kHopper
 static const uint8_t kBillValidatorAddressCount =
     (uint8_t)(kBillValidatorAddressMax - kBillValidatorAddressMin + 1);
 static const uint16_t kDefaultHopperCoinValueCents = 0;
+// Percorso sorter (1..5) considerato "di esclusione" dal totale monete
+// sugli hopper Alberici Evolution in modalita "Discriminatore".
+static const uint8_t kDefaultHopperSorterExcludedPath = 2;
 static const uint8_t kDefaultCoinInHopperMask = 0x01u;   // Hopper 3
 static const uint8_t kDefaultCoinOutHopperMask = 0x06u;  // Hopper 4 + 5
 static const uint8_t kAllHopperMask = 0xFFu;             // Hopper 3..10
@@ -241,6 +244,10 @@ struct AppSettings {
   uint8_t coinInHopperMask = kDefaultCoinInHopperMask;
   uint8_t coinOutHopperMask = kDefaultCoinOutHopperMask;
   uint16_t hopperCoinValueCents[kHopperAddressCount] = {0};
+  // Percorso sorter (1..5) di esclusione per indirizzo, usato solo dagli
+  // hopper Alberici Evolution in modalita "Discriminatore" (vedi
+  // CcTalkHopper::setConfiguredExcludedSorterPath).
+  uint8_t hopperSorterExcludedPath[kHopperAddressCount] = {0};
   uint16_t billInValidatorMask = kAllBillValidatorMask;
   uint16_t billOutValidatorMask = kAllBillValidatorMask;
   bool billRecyclerUseInventoryCommand = true;
@@ -282,6 +289,7 @@ struct AppSettings {
     coinOutHopperMask = kDefaultCoinOutHopperMask;
     for (uint8_t i = 0; i < kHopperAddressCount; i++) {
       hopperCoinValueCents[i] = kDefaultHopperCoinValueCents;
+      hopperSorterExcludedPath[i] = 0;
     }
     billInValidatorMask = kAllBillValidatorMask;
     billOutValidatorMask = kAllBillValidatorMask;

@@ -155,6 +155,12 @@ public:
   // - kCoinFilterComboOneTwoEuro (300, non piu selezionabile da UI ma ancora
   //   supportato per retrocompatibilita) = solo 1e o 2e, filtro statico.
   void setConfiguredCoinValueCents(uint8_t addr, uint16_t valueCents);
+  // Percorso sorter (1..5, il sorter Evolution supporta fino a 5 vie) da
+  // considerare "di esclusione": una moneta instradata su questo percorso
+  // NON viene contata nel totale, qualunque altro percorso osservato SI.
+  // Valido solo in modalita "Discriminatore" (setConfiguredCoinValueCents==0);
+  // valori fuori range 1..5 (incluso 0) ricadono sul default storico (2).
+  void setConfiguredExcludedSorterPath(uint8_t addr, uint8_t path);
   uint8_t addressMask() const { return _addressMask; }
 
 private:
@@ -165,10 +171,14 @@ private:
   // valere 300 centesimi in questo contesto, quindi e sicuro riservarla come
   // codice per "accetta solo 1e o 2e" (vedi setConfiguredCoinValueCents).
   static const uint16_t kCoinFilterComboOneTwoEuro = 300;
+  // Percorso sorter di esclusione di default quando l'utente non ne ha
+  // configurato uno esplicito per l'indirizzo (vedi setConfiguredExcludedSorterPath).
+  static const uint8_t kDefaultExcludedSorterPath = 2;
 
   const HopperDataset& _dataset;
   HopperState _states[kStateCount];
   uint16_t _configuredCoinValueCents[kStateCount] = {0};
+  uint8_t _configuredExcludedSorterPath[kStateCount] = {0};
   uint8_t _addressMask = 0xFFu;
 
   // Blocchi di supporto alla decodifica e all'aggiornamento di stato.
@@ -214,6 +224,7 @@ private:
   void printAzkoyenStatusPayload(Stream& out, const uint8_t* data, uint8_t len) const;
   void printValueAsEuro(Stream& out, uint32_t units) const;
   uint16_t configuredCoinValueCents(uint8_t addr) const;
+  uint8_t configuredExcludedSorterPath(uint8_t addr) const;
   uint16_t knownCoinValue(const HopperState& state) const;
   int8_t findCoinPositionByValue(const HopperState& state, uint16_t valueCents) const;
   bool coinValueAccepted(const HopperState& state, uint16_t valueCents, CoinFilterReason& reason) const;
