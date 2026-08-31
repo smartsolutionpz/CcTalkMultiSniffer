@@ -2909,7 +2909,7 @@ bool WebServerService::parseSettingsFromRequest(AppSettings& out, String& messag
   }
 
   for (uint8_t addr = kHopperAddressMin; addr <= kHopperAddressMax; addr++) {
-    char argName[24] = {0};
+    char argName[32] = {0};
     snprintf(argName, sizeof(argName), "hopperSorterExcludedPath%u", (unsigned)addr);
     unsigned long sorterExcludedPath = 0;
     if (_server.hasArg(argName)) {
