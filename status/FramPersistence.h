@@ -62,6 +62,14 @@ private:
     uint32_t checksum;
   };
 
+  // Clock I2C usato solo durante le operazioni FRAM. Il bus torna al valore
+  // precedente subito dopo: il PCF8574 sulla stessa linea e garantito solo a
+  // 100 kHz.
+  static const uint32_t kFramI2cHz = 400000;
+  // Byte dati per transazione a blocco (piu i 2 byte di indirizzo restano sotto
+  // il buffer Wire di default).
+  static const size_t kWriteChunk = 64;
+
   static uint32_t computeChecksum(const uint8_t* data, size_t len);
 
   bool readBytes(uint16_t address, uint8_t* out, size_t len);
@@ -71,6 +79,8 @@ private:
   static void storedToSnapshot(const StoredLayout& in, Snapshot& out);
 
   Adafruit_FRAM_I2C _fram;
+  TwoWire* _wire = nullptr;
+  uint8_t _i2cAddress = 0x50;
   bool _ready = false;
 };
 

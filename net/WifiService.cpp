@@ -326,43 +326,72 @@ String WifiService::connectedSsid() const {
   return String("");
 }
 
-uint8_t WifiService::scanNetworks(ScannedNetwork* out, uint8_t maxCount) {
-  if (!out || maxCount == 0) return 0;
-
-  memset(out, 0, sizeof(ScannedNetwork) * maxCount);
-
-  const wifi_mode_t restoreMode = WiFi.getMode();
-  char line[192] = {0};
-  snprintf(line, sizeof(line),
-           "[WIFI] scan start: restoreMode=%s apActive=%s connected=%s maxCount=%u",
-           wifiModeText(restoreMode),
-           yesNoText(_apActive),
-           yesNoText(isConnected()),
-           (unsigned)maxCount);
-  logLine(line);
-
-  if (_apActive) {
-    WiFi.mode(WIFI_AP_STA);
-  } else {
-    WiFi.mode(WIFI_STA);
-  }
+void WifiService::restoreRadioAfterScan() {
+  if (_apOnlyMode && !isConnected()) WiFi.mode(WIFI_AP);
+  else WiFi.mode(_scanRestoreMode);
   configureCommonRadio();
-  snprintf(line, sizeof(line), "[WIFI] scan radio mode: %s", wifiModeText(WiFi.getMode()));
+  char line[96] = {0};
+  snprintf(line, sizeof(line), "[WIFI] scan restore mode: %s", wifiModeText(WiFi.getMode()));
   logLine(line);
+}
 
-  const int found = WiFi.scanNetworks(false, true);
+WifiService::ScanState WifiService::pollScan(ScannedNetwork* out, uint8_t maxCount, uint8_t& outCount) {
+  outCount = 0;
+  if (!out || maxCount == 0) return ScanState::Failed;
+
+  char line[192] = {0};
+
+  if (!_scanActive) {
+    _scanRestoreMode = WiFi.getMode();
+    snprintf(line, sizeof(line),
+             "[WIFI] scan start: restoreMode=%s apActive=%s connected=%s maxCount=%u",
+             wifiModeText(_scanRestoreMode),
+             yesNoText(_apActive),
+             yesNoText(isConnected()),
+             (unsigned)maxCount);
+    logLine(line);
+
+    if (_apActive) {
+      WiFi.mode(WIFI_AP_STA);
+    } else {
+      WiFi.mode(WIFI_STA);
+    }
+    configureCommonRadio();
+    snprintf(line, sizeof(line), "[WIFI] scan radio mode: %s", wifiModeText(WiFi.getMode()));
+    logLine(line);
+
+    const int16_t started = WiFi.scanNetworks(true, true, false,
+                                              appconfig::WIFI_SCAN_MAX_MS_PER_CHANNEL);
+    if (started == WIFI_SCAN_FAILED) {
+      logLine("[WIFI] scan start failed");
+      restoreRadioAfterScan();
+      return ScanState::Failed;
+    }
+    _scanActive = true;
+    return ScanState::Running;
+  }
+
+  const int16_t found = WiFi.scanComplete();
+  if (found == WIFI_SCAN_RUNNING) return ScanState::Running;
+
+  _scanActive = false;
+
+  if (found == WIFI_SCAN_FAILED) {
+    logLine("[WIFI] scan complete: failed");
+    WiFi.scanDelete();
+    restoreRadioAfterScan();
+    return ScanState::Failed;
+  }
+
   if (found <= 0) {
-    snprintf(line, sizeof(line), "[WIFI] scan complete: rawFound=%d used=0", found);
+    snprintf(line, sizeof(line), "[WIFI] scan complete: rawFound=%d used=0", (int)found);
     logLine(line);
     WiFi.scanDelete();
-    if (_apOnlyMode && !isConnected()) WiFi.mode(WIFI_AP);
-    else WiFi.mode(restoreMode);
-    configureCommonRadio();
-    snprintf(line, sizeof(line), "[WIFI] scan restore mode: %s", wifiModeText(WiFi.getMode()));
-    logLine(line);
-    return 0;
+    restoreRadioAfterScan();
+    return ScanState::Done;
   }
 
+  memset(out, 0, sizeof(ScannedNetwork) * maxCount);
   uint8_t used = 0;
   for (int i = 0; i < found && used < maxCount; i++) {
     const String ssid = WiFi.SSID(i);
@@ -398,7 +427,7 @@ uint8_t WifiService::scanNetworks(ScannedNetwork* out, uint8_t maxCount) {
     used++;
   }
 
-  snprintf(line, sizeof(line), "[WIFI] scan complete: rawFound=%d used=%u", found, (unsigned)used);
+  snprintf(line, sizeof(line), "[WIFI] scan complete: rawFound=%d used=%u", (int)found, (unsigned)used);
   logLine(line);
   for (uint8_t i = 0; i < used; i++) {
     snprintf(line, sizeof(line),
@@ -412,12 +441,9 @@ uint8_t WifiService::scanNetworks(ScannedNetwork* out, uint8_t maxCount) {
   }
 
   WiFi.scanDelete();
-  if (_apOnlyMode && !isConnected()) WiFi.mode(WIFI_AP);
-  else WiFi.mode(restoreMode);
-  configureCommonRadio();
-  snprintf(line, sizeof(line), "[WIFI] scan restore mode: %s", wifiModeText(WiFi.getMode()));
-  logLine(line);
-  return used;
+  restoreRadioAfterScan();
+  outCount = used;
+  return ScanState::Done;
 }
 
 void WifiService::reconnect() {

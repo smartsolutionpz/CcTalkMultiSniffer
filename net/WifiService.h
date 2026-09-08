@@ -25,6 +25,9 @@ public:
     bool hidden;
   };
 
+  // Stato della scansione reti non bloccante (vedi pollScan()).
+  enum class ScanState : uint8_t { Idle, Running, Done, Failed };
+
   struct ClockInfo {
     bool valid = false;
     bool syncedFromInternet = false;
@@ -54,7 +57,11 @@ public:
   void ipToString(char* out, size_t outLen) const;
   String apSsid() const;
   String connectedSsid() const;
-  uint8_t scanNetworks(ScannedNetwork* out, uint8_t maxCount);
+  // Scansione reti non bloccante: alla prima chiamata avvia lo scan asincrono e
+  // ritorna Running; le chiamate successive restituiscono Running finche lo scan
+  // e in corso, poi Done (con out/outCount popolati) o Failed. Va richiamata
+  // periodicamente (es. dall'handler HTTP interrogato in polling dal browser).
+  ScanState pollScan(ScannedNetwork* out, uint8_t maxCount, uint8_t& outCount);
   void reconnect();
   bool getClockInfo(ClockInfo& out) const;
   void noteDisconnectReason(uint16_t reason);
@@ -66,6 +73,7 @@ public:
 private:
   void attachWifiEvents();
   void configureCommonRadio();
+  void restoreRadioAfterScan();
   void enforcePerformanceMode(bool logResult);
   void logRuntimeConfig(const char* mode);
   void logStatusIfChanged(wl_status_t st, bool force);
@@ -97,6 +105,8 @@ private:
   uint32_t _lastAttemptMs = 0;
   uint32_t _lastClockSyncRequestMs = 0;
   uint32_t _lastPerformanceApplyMs = 0;
+  bool _scanActive = false;
+  wifi_mode_t _scanRestoreMode = WIFI_OFF;
   volatile uint16_t _lastDisconnectReason = 0;
   volatile bool _disconnectReasonPending = false;
 

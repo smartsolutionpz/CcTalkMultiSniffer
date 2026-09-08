@@ -1852,12 +1852,20 @@ void WebServerService::handleSettingsJs() {
     async function loadWifiNetworks(selectedSsid) {
       wifiStatus().textContent = 'Scansione reti in corso...';
       try {
-        const r = await fetch('/api/wifi/networks', { cache: 'no-store' });
-        const data = await r.json();
+        let data = null;
+        for (let attempt = 0; attempt < 20; attempt++) {
+          const r = await fetch('/api/wifi/networks', { cache: 'no-store' });
+          data = await r.json();
+          if (!data || data.status !== 'scanning') break;
+          await new Promise((res) => setTimeout(res, 500));
+        }
+        if (data && data.status === 'scanning') throw new Error('scan timeout');
+        if (data && data.status === 'failed') throw new Error('scan failed');
+
         const sel = wifiSelect();
         sel.innerHTML = '';
 
-        const networks = data.networks || [];
+        const networks = (data && data.networks) || [];
         for (const net of networks) {
           const opt = document.createElement('option');
           opt.value = net.ssid || '';
@@ -2560,11 +2568,22 @@ void WebServerService::handleApiWifiNetworks() {
   }
 
   WifiService::ScannedNetwork networks[WifiService::kMaxScannedNetworks];
-  const uint8_t count = _wifi.scanNetworks(networks, WifiService::kMaxScannedNetworks);
+  uint8_t count = 0;
+  const WifiService::ScanState state =
+      _wifi.pollScan(networks, WifiService::kMaxScannedNetworks, count);
+
+  if (state == WifiService::ScanState::Running) {
+    _server.send(200, "application/json", "{\"ok\":true,\"status\":\"scanning\"}");
+    return;
+  }
+  if (state == WifiService::ScanState::Failed) {
+    _server.send(200, "application/json", "{\"ok\":true,\"status\":\"failed\",\"networks\":[]}");
+    return;
+  }
 
   String out;
   out.reserve(2048);
-  out += "{\"ok\":true,\"connectedSsid\":\"";
+  out += "{\"ok\":true,\"status\":\"done\",\"connectedSsid\":\"";
   appendJsonEscaped(out, _wifi.connectedSsid().c_str());
   out += "\",\"networks\":[";
 

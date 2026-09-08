@@ -9,17 +9,23 @@ namespace ccms {
 
 bool FramPersistence::begin(TwoWire& wire, uint8_t i2cAddress) {
   // `begin()` non scrive nulla: verifica solo che il chip FRAM risponda.
+  _wire = &wire;
+  _i2cAddress = i2cAddress;
   _ready = _fram.begin(i2cAddress, &wire);
   return _ready;
 }
 
 bool FramPersistence::load(Snapshot& out) {
-  if (!_ready) return false;
+  if (!_ready || !_wire) return false;
 
   // Tutta la struttura viene letta in RAM e validata prima di esporla al resto
   // del sistema, cosi snapshot corrotti non contaminano lo stato runtime.
   StoredLayout raw;
-  if (!readBytes(kBaseAddress, reinterpret_cast<uint8_t*>(&raw), sizeof(raw))) return false;
+  const uint32_t prevHz = _wire->getClock();
+  _wire->setClock(kFramI2cHz);
+  const bool ok = readBytes(kBaseAddress, reinterpret_cast<uint8_t*>(&raw), sizeof(raw));
+  _wire->setClock(prevHz);
+  if (!ok) return false;
 
   if (raw.magic != kMagic) return false;
   if (raw.version != kVersion) return false;
@@ -34,7 +40,7 @@ bool FramPersistence::load(Snapshot& out) {
 }
 
 bool FramPersistence::save(const Snapshot& in) {
-  if (!_ready) return false;
+  if (!_ready || !_wire) return false;
 
   // Il checksum viene calcolato sul layout serializzato, non sullo snapshot
   // logico, per proteggere esattamente i byte memorizzati.
@@ -43,7 +49,11 @@ bool FramPersistence::save(const Snapshot& in) {
   raw.checksum = computeChecksum(reinterpret_cast<const uint8_t*>(&raw),
                                  offsetof(StoredLayout, checksum));
 
-  return writeBytes(kBaseAddress, reinterpret_cast<const uint8_t*>(&raw), sizeof(raw));
+  const uint32_t prevHz = _wire->getClock();
+  _wire->setClock(kFramI2cHz);
+  const bool ok = writeBytes(kBaseAddress, reinterpret_cast<const uint8_t*>(&raw), sizeof(raw));
+  _wire->setClock(prevHz);
+  return ok;
 }
 
 uint32_t FramPersistence::computeChecksum(const uint8_t* data, size_t len) {
@@ -76,10 +86,21 @@ bool FramPersistence::readBytes(uint16_t address, uint8_t* out, size_t len) {
 }
 
 bool FramPersistence::writeBytes(uint16_t address, const uint8_t* data, size_t len) {
-  // La libreria scrive byte per byte; la FRAM tollera bene questo pattern.
-  if (!data) return false;
-  for (size_t i = 0; i < len; i++) {
-    if (!_fram.write((uint16_t)(address + i), data[i])) return false;
+  // Scrittura a blocco: una transazione I2C ogni kWriteChunk byte invece di una
+  // per byte. La FRAM auto-incrementa il puntatore interno, quindi ogni chunk
+  // rispedisce solo i 2 byte di indirizzo iniziale. Nessuna attesa di ciclo di
+  // scrittura: la FRAM conferma subito con l'ACK di endTransmission().
+  if (!data || !_wire) return false;
+
+  for (size_t offset = 0; offset < len; offset += kWriteChunk) {
+    const size_t chunk = (len - offset > kWriteChunk) ? kWriteChunk : (len - offset);
+    const uint16_t addr = (uint16_t)(address + offset);
+
+    _wire->beginTransmission(_i2cAddress);
+    _wire->write((uint8_t)(addr >> 8));
+    _wire->write((uint8_t)(addr & 0xFF));
+    if (_wire->write(data + offset, chunk) != chunk) return false;
+    if (_wire->endTransmission() != 0) return false;
   }
   return true;
 }

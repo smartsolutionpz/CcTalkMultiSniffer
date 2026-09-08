@@ -22,6 +22,10 @@ static const uint8_t WIFI_AP_CHANNEL = 1;
 static const int8_t WIFI_TX_POWER = 78; // unita 0.25 dBm: 78 = 19.5 dBm
 static const bool WIFI_FORCE_LEGACY_24G = true;
 static const uint32_t WIFI_PERFORMANCE_REAPPLY_INTERVAL_MS = 5000;
+// Dwell per canale durante la scansione reti (ms). Il default della libreria e
+// 300: valori piu bassi accorciano la finestra in cui il driver WiFi puo
+// prelazionare lo sniffer sul core condiviso della ESP32-C6.
+static const uint32_t WIFI_SCAN_MAX_MS_PER_CHANNEL = 120;
 
 // Timeout di una singola connessione e intervallo tra retry (ms).
 static const uint32_t WIFI_CONNECT_TIMEOUT_MS = 15000;
