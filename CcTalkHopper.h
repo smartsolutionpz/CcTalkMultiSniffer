@@ -19,6 +19,20 @@ public:
     COIN_FILTER_REASON_MANUAL_FILTER = 2     // taglio non nel filtro manuale (1e/2e)
   };
 
+  // Sui dataset Azkoyen il device puo esporre lo stesso conteggio erogato
+  // tramite piu famiglie di comandi (status generico 0xA6/0xAB/0x85, oppure
+  // status "custom" 0x13/0x15/0x23). Sono percorsi indipendenti che, se il
+  // master reale li usa entrambi per lo stesso indirizzo, finirebbero per
+  // accreditare due volte la stessa moneta erogata su dispensedTotalValue.
+  // Per evitarlo, la prima fonte che produce un delta > 0 "vince" e resta
+  // l'unica autorevole per quell'indirizzo finche' non arriva un reset (0x01).
+  enum DispenseAccountingSource : uint8_t {
+    DISPENSE_SOURCE_NONE = 0,
+    DISPENSE_SOURCE_A6_AZKOYEN = 1,      // 0xA6 con statusMode AZKOYEN_TYPE1_PAYOUT_COUNTER
+    DISPENSE_SOURCE_POLL_GENERIC = 2,    // 0xAB / 0x85
+    DISPENSE_SOURCE_AZKOYEN_CUSTOM = 3   // 0x13 / 0x15 / 0x23
+  };
+
   // Associazione tra indice coin table e valore monetario dichiarato dal device.
   struct CoinValueState {
     bool valid = false;
@@ -109,6 +123,9 @@ public:
     uint32_t dispensedTotalValue = 0;
     bool lastDispenseStepValid = false;
     uint16_t lastDispenseStepValue = 0;
+    // Fonte comando che ha "vinto" il diritto ad accumulare su
+    // dispensedTotalValue per questo indirizzo (vedi DispenseAccountingSource).
+    DispenseAccountingSource dispenseAccountingSource = DISPENSE_SOURCE_NONE;
 
     // Valore riconosciuto dal polling ma escluso dal totale perche il taglio
     // risulta scartato dal sorter (percorso <> 1 osservato via 0xD2) oppure,
@@ -198,6 +215,13 @@ private:
   uint16_t azkoyenType2ValueUnits(const HopperState& state) const;
   bool azkoyenHasValueConfig(const HopperState& state) const;
   uint8_t azkoyenHopperStatusCounterDelta(uint8_t previous, uint8_t current) const;
+  // Arbitra fra le famiglie di comandi che possono riportare l'erogato per lo
+  // stesso indirizzo (vedi DispenseAccountingSource): la prima fonte che
+  // richiede il diritto di contabilizzare lo ottiene stabilmente per
+  // l'indirizzo, finche' non arriva un reset (0x01). Ritorna true se `source`
+  // e' (o diventa ora) la fonte autorevole per questo stato, false se
+  // un'altra fonte ha gia' il diritto e questo delta non va accreditato.
+  bool claimOrCheckDispenseSource(HopperState& state, DispenseAccountingSource source) const;
   void updateAzkoyenDispensedFromHopperStatus(HopperState& state,
                                               uint8_t payoutCounter,
                                               uint8_t type1Remaining,
@@ -212,6 +236,7 @@ private:
                                   uint16_t type1Unpaid,
                                   uint16_t type2Unpaid) const;
   void updateAzkoyenDispensedValue(HopperState& state,
+                                   uint8_t cmdHeader,
                                    uint8_t code,
                                    uint16_t type1Paid,
                                    uint16_t type2Paid);
@@ -228,7 +253,8 @@ private:
   uint16_t knownCoinValue(const HopperState& state) const;
   int8_t findCoinPositionByValue(const HopperState& state, uint16_t valueCents) const;
   bool coinValueAccepted(const HopperState& state, uint16_t valueCents, CoinFilterReason& reason) const;
-  void updateDispensedFromPoll(HopperState& state, uint16_t remaining, uint16_t paid, uint16_t unpaid);
+  void updateDispensedFromPoll(HopperState& state, uint8_t cmdHeader, uint8_t eventCounter,
+                                uint16_t remaining, uint16_t paid, uint16_t unpaid);
   void updateState(const CcTalkTransaction& t);
   HopperState* mutableStateFor(uint8_t addr);
 };

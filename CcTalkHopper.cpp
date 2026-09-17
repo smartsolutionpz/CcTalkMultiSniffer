@@ -3,6 +3,7 @@
 #include "CcTalkHopper.h"
 #include "CcTalkMaster.h"
 #include "CcTalkUtils.h"
+#include "AnomalyDebugLog.h" // [ANOMALY_DEBUG]
 #include <string.h>
 
 namespace {
@@ -139,6 +140,11 @@ void CcTalkHopper::updateState(const CcTalkTransaction& t) {
       state->pollSnapshotValid = false;
       state->lastDispenseStepValid = false;
       state->lastExcludedStepValid = false;
+      // Dopo un reset del device, la prossima fonte di comando che produce un
+      // delta di erogazione puo' ri-contendersi il diritto a contabilizzare
+      // (vedi guardia in updateAzkoyenDispensedFromHopperStatus/updateDispensedFromPoll/
+      // updateAzkoyenDispensedValue).
+      state->dispenseAccountingSource = DISPENSE_SOURCE_NONE;
       // Il reset riporta tutti i percorsi sorter al default di fabbrica (path 1).
       memset(state->coinSorterPath, 0, sizeof(state->coinSorterPath));
       return;
@@ -266,7 +272,7 @@ void CcTalkHopper::updateState(const CcTalkTransaction& t) {
         } else {
           const uint16_t coinValue = knownCoinValue(*state);
           if (coinValue > 0) {
-            updateDispensedFromPoll(*state,
+            updateDispensedFromPoll(*state, req.hdr, resp.data[0],
                                     (uint16_t)(resp.data[1] * coinValue),
                                     (uint16_t)(resp.data[2] * coinValue),
                                     (uint16_t)(resp.data[3] * coinValue));
@@ -285,7 +291,7 @@ void CcTalkHopper::updateState(const CcTalkTransaction& t) {
         const uint16_t remaining = readU16LE(&resp.data[1]);
         const uint16_t paid = readU16LE(&resp.data[3]);
         const uint16_t unpaid = readU16LE(&resp.data[5]);
-        updateDispensedFromPoll(*state, remaining, paid, unpaid);
+        updateDispensedFromPoll(*state, req.hdr, resp.data[0], remaining, paid, unpaid);
       }
       return;
 
@@ -306,7 +312,7 @@ void CcTalkHopper::updateState(const CcTalkTransaction& t) {
           state->azkoyenCurrentType2Paid = type2Paid;
           state->azkoyenCurrentType2Unpaid = type2Unpaid;
           state->azkoyenCurrentStatusValid = true;
-          updateAzkoyenDispensedValue(*state, code, type1Paid, type2Paid);
+          updateAzkoyenDispensedValue(*state, req.hdr, code, type1Paid, type2Paid);
         }
       }
       return;
@@ -321,7 +327,7 @@ void CcTalkHopper::updateState(const CcTalkTransaction& t) {
                                      type1Unpaid,
                                      type2Paid,
                                      type2Unpaid)) {
-          updateAzkoyenDispensedValue(*state, code, type1Paid, type2Paid);
+          updateAzkoyenDispensedValue(*state, req.hdr, code, type1Paid, type2Paid);
 
           state->azkoyenLastCommandCode = code;
           state->azkoyenLastType1Paid = type1Paid;
@@ -408,7 +414,21 @@ void CcTalkHopper::dumpState(Stream& out) const {
     out.print(s.dispensedTotalValue);
     out.print(F(" ("));
     printValueAsEuro(out, s.dispensedTotalValue);
-    out.println(F(")"));
+    out.print(F(")"));
+    switch (s.dispenseAccountingSource) {
+      case DISPENSE_SOURCE_A6_AZKOYEN:
+        out.println(F(" [fonte: 0xA6]"));
+        break;
+      case DISPENSE_SOURCE_POLL_GENERIC:
+        out.println(F(" [fonte: 0xAB/0x85]"));
+        break;
+      case DISPENSE_SOURCE_AZKOYEN_CUSTOM:
+        out.println(F(" [fonte: 0x13/0x15/0x23]"));
+        break;
+      default:
+        out.println();
+        break;
+    }
     if (s.excludedTotalValue > 0) {
       out.print(F("    excludedTotal="));
       out.print(s.excludedTotalValue);
@@ -1091,6 +1111,16 @@ uint8_t CcTalkHopper::azkoyenHopperStatusCounterDelta(uint8_t previous, uint8_t 
   return 0xFFu;
 }
 
+bool CcTalkHopper::claimOrCheckDispenseSource(HopperState& state, DispenseAccountingSource source) const {
+  if (state.dispenseAccountingSource == DISPENSE_SOURCE_NONE) {
+    // Prima fonte che riporta un evento di erogazione per questo indirizzo:
+    // diventa quella autorevole finche' non arriva un reset (0x01).
+    state.dispenseAccountingSource = source;
+    return true;
+  }
+  return state.dispenseAccountingSource == source;
+}
+
 void CcTalkHopper::updateAzkoyenDispensedFromHopperStatus(HopperState& state,
                                                           uint8_t payoutCounter,
                                                           uint8_t type1Remaining,
@@ -1120,9 +1150,19 @@ void CcTalkHopper::updateAzkoyenDispensedFromHopperStatus(HopperState& state,
 
   const uint32_t deltaValue =
       (uint32_t)type1Paid * (uint32_t)azkoyenType1CoinValueCents(state);
-  state.dispensedTotalValue += deltaValue;
-  state.lastDispenseStepValue = (deltaValue > 0xFFFFu) ? 0xFFFFu : (uint16_t)deltaValue;
-  state.lastDispenseStepValid = true;
+  if (claimOrCheckDispenseSource(state, DISPENSE_SOURCE_A6_AZKOYEN)) {
+    state.dispensedTotalValue += deltaValue;
+    state.lastDispenseStepValue = (deltaValue > 0xFFFFu) ? 0xFFFFu : (uint16_t)deltaValue;
+    state.lastDispenseStepValid = true;
+    // [ANOMALY_DEBUG]
+    anomalydebug::logEvent(anomalydebug::DEV_HOPPER, state.addr, 0xA6,
+                            payoutCounter, state.lastDispenseStepValue);
+  } else {
+    // Un'altra fonte comando (0xAB/0x85 o 0x13/0x23) e' gia' quella
+    // autorevole per questo indirizzo: valore letto ma non accreditato, per
+    // evitare di contare due volte la stessa moneta erogata.
+    state.lastDispenseStepValid = false;
+  }
 }
 
 uint32_t CcTalkHopper::azkoyenPaidBaseUnits(const HopperState& state,
@@ -1154,6 +1194,7 @@ uint32_t CcTalkHopper::azkoyenUnpaidBaseUnits(const HopperState& state,
 }
 
 void CcTalkHopper::updateAzkoyenDispensedValue(HopperState& state,
+                                               uint8_t cmdHeader,
                                                uint8_t code,
                                                uint16_t type1Paid,
                                                uint16_t type2Paid) {
@@ -1189,15 +1230,27 @@ void CcTalkHopper::updateAzkoyenDispensedValue(HopperState& state,
   const uint16_t baseCoinValueCents = azkoyenBaseCoinValueCents(state);
   const uint32_t deltaValue = deltaBaseUnits * (uint32_t)baseCoinValueCents;
   if (deltaValue > 0) {
-    state.dispensedTotalValue += deltaValue;
-    state.lastDispenseStepValue = (uint16_t)deltaValue;
-    state.lastDispenseStepValid = true;
+    if (claimOrCheckDispenseSource(state, DISPENSE_SOURCE_AZKOYEN_CUSTOM)) {
+      state.dispensedTotalValue += deltaValue;
+      state.lastDispenseStepValue = (uint16_t)deltaValue;
+      state.lastDispenseStepValid = true;
+      // [ANOMALY_DEBUG]
+      anomalydebug::logEvent(anomalydebug::DEV_HOPPER, state.addr, cmdHeader,
+                              code, state.lastDispenseStepValue);
+    } else {
+      // Un'altra fonte comando (0xA6 o 0xAB/0x85) e' gia' quella autorevole
+      // per questo indirizzo: valore letto ma non accreditato, per evitare
+      // di contare due volte la stessa moneta erogata.
+      state.lastDispenseStepValid = false;
+    }
   } else {
     state.lastDispenseStepValid = false;
   }
 }
 
 void CcTalkHopper::updateDispensedFromPoll(HopperState& state,
+                                           uint8_t cmdHeader,
+                                           uint8_t eventCounter,
                                            uint16_t remaining,
                                            uint16_t paid,
                                            uint16_t unpaid) {
@@ -1239,10 +1292,21 @@ void CcTalkHopper::updateDispensedFromPoll(HopperState& state,
   if (deltaDispensed > 0) {
     CoinFilterReason reason = COIN_FILTER_REASON_NONE;
     if (coinValueAccepted(state, deltaDispensed, reason)) {
-      state.dispensedTotalValue += deltaDispensed;
-      state.lastDispenseStepValue = deltaDispensed;
-      state.lastDispenseStepValid = true;
-      state.lastExcludedStepValid = false;
+      if (claimOrCheckDispenseSource(state, DISPENSE_SOURCE_POLL_GENERIC)) {
+        state.dispensedTotalValue += deltaDispensed;
+        state.lastDispenseStepValue = deltaDispensed;
+        state.lastDispenseStepValid = true;
+        state.lastExcludedStepValid = false;
+        // [ANOMALY_DEBUG]
+        anomalydebug::logEvent(anomalydebug::DEV_HOPPER, state.addr, cmdHeader,
+                                eventCounter, deltaDispensed);
+      } else {
+        // Un'altra fonte comando (0xA6 o 0x13/0x23) e' gia' quella autorevole
+        // per questo indirizzo: valore letto ma non accreditato, per evitare
+        // di contare due volte la stessa moneta erogata.
+        state.lastDispenseStepValid = false;
+        state.lastExcludedStepValid = false;
+      }
     } else {
       // Taglio riconosciuto ma non contato: scartato dal sorter, escluso dal
       // filtro manuale, o (in modalita "Discriminatore") senza corrispondenza

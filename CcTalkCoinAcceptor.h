@@ -34,6 +34,14 @@ public:
     uint8_t eventCounter = 0;
     bool eventCounterSeen = false;
     uint8_t lastProcessedEventCounter = 0;
+    // Diagnostica: incrementato quando il delta fra due letture di 0xE5 e'
+    // maggiore di 5, cioe' il buffer del device (solo 5 slot) ha gia'
+    // sovrascritto eventi piu' vecchi prima che il master li rileggesse. Gli
+    // eventi persi in questo modo non sono recuperabili (non piu' presenti
+    // sul bus): il contatore serve solo a segnalare che e' successo, per
+    // distinguere questa causa da un bug di conteggio in caso di mismatch
+    // con il totale reale del device.
+    uint16_t possibleLostEvents = 0;
     uint32_t acceptedTotalCents = 0;
     bool lastAcceptedValid = false;
     uint8_t lastAcceptedCoinType = 0;

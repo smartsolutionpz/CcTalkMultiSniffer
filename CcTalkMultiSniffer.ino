@@ -69,6 +69,7 @@
 #include "net/RemoteRegistroEventiService.h"
 #include "mesh/EspNowMasterService.h"
 #include "web/WebServerService.h"
+#include "AnomalyDebugLog.h" // [ANOMALY_DEBUG]
 
 static_assert(appconfig::TASK_PRIORITY_SNIFFER > appconfig::TASK_PRIORITY_NET,
               "ccTalk sniffer priority must be strictly higher than auxiliary services priority");
@@ -273,6 +274,7 @@ static uint32_t g_lastFramCongruenceCheckMs = 0;
 static uint32_t g_lastSnifferCycleStartUs = 0;
 static uint32_t g_lastAuxServiceMs = 0;
 static uint32_t g_lastPersistServiceMs = 0;
+static uint32_t g_lastAnomalyTickMs = 0; // [ANOMALY_DEBUG]
 static uint32_t g_wifiStableSinceMs = 0;
 static uint32_t g_lastMeshStartAttemptMs = 0;
 static volatile uint32_t g_lastCcTalkActivityMs = 0;
@@ -3653,6 +3655,8 @@ static void initFramPersistence() {
   // comunque a funzionare usando solo i dati live della sessione.
   Wire.begin(appconfig::FRAM_I2C_SDA_PIN, appconfig::FRAM_I2C_SCL_PIN);
   g_framReady = g_framStore.begin(Wire, appconfig::FRAM_I2C_ADDR);
+  // [ANOMALY_DEBUG] stesso chip/bus, regione FRAM separata (vedi AnomalyDebugLog.cpp).
+  anomalydebug::begin(Wire, appconfig::FRAM_I2C_ADDR);
   resetFramDirtyTracking();
   g_framSaveErrorLatched = false;
   g_framCongruenceMismatchLatched = false;
@@ -3772,6 +3776,18 @@ static void serviceAuxOnce() {
     g_lastPersistServiceMs = now;
     flushFramIfDue();
     serviceFramCongruenceCheck();
+  }
+
+  // [ANOMALY_DEBUG] controllo saldo IN/OUT a riposo, throttlato: non serve
+  // valutarlo piu' spesso della finestra di quiete stessa.
+  if (g_economicTotalsValid &&
+      (uint32_t)(now - g_lastAnomalyTickMs) >= 1000UL) {
+    g_lastAnomalyTickMs = now;
+    const EconomicTotals& t = g_lastEconomicTotals;
+    const int64_t saldo64 = (int64_t)t.cntotBanconoteInCents - (int64_t)t.cntotBanconoteOutCents +
+                            (int64_t)t.cntotMoneteInCents - (int64_t)t.cntotMoneteOutCents;
+    int32_t saldoClamped = (saldo64 > INT32_MAX) ? INT32_MAX : (saldo64 < INT32_MIN ? INT32_MIN : (int32_t)saldo64);
+    anomalydebug::tick(saldoClamped, now);
   }
 }
 

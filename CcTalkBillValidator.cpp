@@ -21,6 +21,7 @@
 #include "CcTalkBillValidator.h"
 #include "CcTalkMaster.h"
 #include "CcTalkUtils.h"
+#include "AnomalyDebugLog.h" // [ANOMALY_DEBUG]
 #include <string.h>
 
 namespace {
@@ -369,6 +370,11 @@ void CcTalkBillValidator::dumpState(Stream& out) const {
     out.print(F(" eventCounter="));
     if (s.eventCounterValid) out.println(s.eventCounter);
     else out.println(F("n/a"));
+    if (s.possibleLostEvents > 0) {
+      out.print(F("    possibleLostEvents="));
+      out.print(s.possibleLostEvents);
+      out.println(F(" (buffer 0x9F a 5 slot, polling troppo lento rispetto agli eventi)"));
+    }
 
     if (s.manufacturerValid) {
       out.print(F("    manufacturer=\""));
@@ -1044,7 +1050,15 @@ void CcTalkBillValidator::accumulateAcceptedBills(BillValidatorState& state, con
   if (delta == 0) return;
 
   uint8_t eventsToProcess = delta;
-  if (eventsToProcess > 5) eventsToProcess = 5;
+  if (eventsToProcess > 5) {
+    // Il buffer di 0x9F ha solo 5 slot: gli eventi piu' vecchi del delta sono
+    // gia' stati sovrascritti sul device prima di questa lettura e non sono
+    // recuperabili. Segnaliamo la perdita invece di lasciarla silenziosa.
+    const uint16_t lost = (uint16_t)(eventsToProcess - 5);
+    const uint32_t total = (uint32_t)state.possibleLostEvents + lost;
+    state.possibleLostEvents = (total > 0xFFFFu) ? 0xFFFFu : (uint16_t)total;
+    eventsToProcess = 5;
+  }
 
   for (uint8_t i = 0; i < eventsToProcess; i++) {
     const uint8_t a = resp.data[1 + (i * 2)];
@@ -1062,6 +1076,9 @@ void CcTalkBillValidator::accumulateAcceptedBills(BillValidatorState& state, con
     state.lastAcceptedValid = true;
     state.lastAcceptedBillType = a;
     state.lastAcceptedEuro = denom;
+    // [ANOMALY_DEBUG]
+    anomalydebug::logEvent(anomalydebug::DEV_BILL_VALIDATOR, state.addr, 0x9F,
+                            resp.data[0], (uint16_t)((uint16_t)denom * 100u));
 
     if ((usesMd100RecyclerInventory() && isRecyclerStoredEvent(a, b)) ||
         iproRecyclerCredit) {
@@ -1148,6 +1165,9 @@ void CcTalkBillValidator::accumulateMd100Dispense(BillValidatorState& state,
   state.lastDispensedValid = true;
   state.lastDispensedEuro = (uint8_t)denom;
   applyRecyclerDelta(state, (uint8_t)denom, -1);
+  // [ANOMALY_DEBUG] 0x61 non ha un counter di protocollo proprio: registriamo 0.
+  anomalydebug::logEvent(anomalydebug::DEV_BILL_VALIDATOR, state.addr, 0x61,
+                          0, (uint16_t)((uint16_t)denom * 100u));
 }
 
 void CcTalkBillValidator::accumulateSmartPayoutDispense(BillValidatorState& state,
@@ -1162,6 +1182,9 @@ void CcTalkBillValidator::accumulateSmartPayoutDispense(BillValidatorState& stat
   state.lastDispensedValid = true;
   state.lastDispensedEuro = (uint8_t)denom;
   applyRecyclerDelta(state, (uint8_t)denom, -1);
+  // [ANOMALY_DEBUG] 0x16 non ha un counter di protocollo proprio: registriamo 0.
+  anomalydebug::logEvent(anomalydebug::DEV_BILL_VALIDATOR, state.addr, 0x16,
+                          0, (uint16_t)((uint16_t)denom * 100u));
 }
 
 bool CcTalkBillValidator::applyRecyclerDelta(BillValidatorState& state,

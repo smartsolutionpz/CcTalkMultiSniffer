@@ -3,6 +3,7 @@
 #include "CcTalkCoinAcceptor.h"
 #include "CcTalkMaster.h"
 #include "CcTalkUtils.h"
+#include "AnomalyDebugLog.h" // [ANOMALY_DEBUG]
 #include <string.h>
 
 namespace {
@@ -284,7 +285,16 @@ void CcTalkCoinAcceptor::updateState(const CcTalkTransaction& t) {
 
         if (_state.eventCounterSeen) {
           uint8_t delta = eventCounterDelta(_state.lastProcessedEventCounter, resp.data[0]);
-          if (delta > 5) delta = 5;
+          if (delta > 5) {
+            // Il buffer di 0xE5 ha solo 5 slot: gli eventi piu' vecchi del
+            // delta sono gia' stati sovrascritti sul device prima di questa
+            // lettura e non sono recuperabili. Segnaliamo la perdita invece
+            // di lasciarla silenziosa.
+            const uint16_t lost = (uint16_t)(delta - 5);
+            const uint32_t total = (uint32_t)_state.possibleLostEvents + lost;
+            _state.possibleLostEvents = (total > 0xFFFFu) ? 0xFFFFu : (uint16_t)total;
+            delta = 5;
+          }
           _state.lastBufferedPollDelta = delta;
 
           for (uint8_t i = 0; i < delta; i++) {
@@ -318,6 +328,9 @@ void CcTalkCoinAcceptor::updateState(const CcTalkTransaction& t) {
             _state.lastAcceptedValueCents = valueCents;
             trace.accountingCode = BUFFERED_ACCOUNTING_COUNTED;
             trace.valueCents = valueCents;
+            // [ANOMALY_DEBUG]
+            anomalydebug::logEvent(anomalydebug::DEV_COIN_ACCEPTOR, _state.addr, 0xE5,
+                                    resp.data[0], valueCents);
           }
         } else {
           _state.lastBufferedPollDelta = 5;
@@ -356,6 +369,11 @@ void CcTalkCoinAcceptor::dumpState(Stream& out) const {
   else out.println(F("n/a"));
   out.print(F("    eventCounterSeen="));
   out.println(_state.eventCounterSeen ? F("yes") : F("no"));
+  if (_state.possibleLostEvents > 0) {
+    out.print(F("    possibleLostEvents="));
+    out.print(_state.possibleLostEvents);
+    out.println(F(" (buffer 0xE5 a 5 slot, polling troppo lento rispetto agli eventi)"));
+  }
   out.print(F("    valueProfile="));
   const CoinAcceptorValueProfile* profile =
       coinAcceptorLookupValueProfile(_dataset, _state.activeValueProfile);

@@ -5,10 +5,44 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 namespace ccms {
 
 namespace {
+
+// [ANOMALY_DEBUG] helper per l'esportazione CSV del log di debug anomalie.
+const char* anomalyKindLabel(anomalydebug::DeviceKind kind) {
+  switch (kind) {
+    case anomalydebug::DEV_BILL_VALIDATOR: return "BILL_VALIDATOR";
+    case anomalydebug::DEV_HOPPER: return "HOPPER";
+    case anomalydebug::DEV_COIN_ACCEPTOR: return "COIN_ACCEPTOR";
+    default: return "?";
+  }
+}
+
+// epoch==0 significa "non ricostruibile" (nessuna sincronizzazione NTP
+// disponibile all'epoca dell'evento): si stampa "n/d" invece di una data farlocca.
+void anomalyFormatEpoch(int64_t epoch, char* out, size_t outLen) {
+  if (!out || outLen == 0) return;
+  if (epoch == 0) {
+    snprintf(out, outLen, "n/d");
+    return;
+  }
+  const time_t t = (time_t)epoch;
+  struct tm tmVal;
+  if (!localtime_r(&t, &tmVal)) {
+    snprintf(out, outLen, "n/d");
+    return;
+  }
+  strftime(out, outLen, "%d/%m/%Y %H:%M:%S", &tmVal);
+}
+
+// Contesto passato attraverso l'EntryVisitor C-style di AnomalyDebugLog.
+struct AnomalyCsvCtx {
+  WebServerService* self;
+  const char* section; // "RAM" oppure "FRAM"
+};
 // Helper per serializzare interi signed a 64 bit in JSON costruito a mano.
 void appendInt64(String& out, int64_t value) {
   char buf[24] = {0};
@@ -210,6 +244,11 @@ void WebServerService::begin() {
              [this]() { handleApiSetBillRecyclerInventoryMode(); });
   _server.on("/api/remote/change", HTTP_POST, [this]() { handleApiSaveRemoteSnapshot(); });
   _server.on("/api/mode/prog", HTTP_POST, [this]() { handleApiEnterProgMode(); });
+  // [ANOMALY_DEBUG] recupero via web del log di debug anomalie IN/OUT.
+  // Rimuovere queste 3 route a fine indagine (vedi AnomalyDebugLog.h).
+  _server.on("/debug/anomalylog", HTTP_GET, [this]() { handleDebugAnomalyLog(); });
+  _server.on("/debug/anomalystatus", HTTP_GET, [this]() { handleDebugAnomalyStatus(); });
+  _server.on("/debug/anomalyclear", HTTP_POST, [this]() { handleDebugAnomalyClear(); });
   _server.onNotFound([this]() { _server.send(404, "text/plain", "Not found"); });
 
   _server.begin();
@@ -391,6 +430,16 @@ void WebServerService::handleRoot() {
     </div>
   </div>
   <main>
+    <!-- [ANOMALY_DEBUG] banner + download log: rimuovere questo blocco e il
+         relativo codice JS a fine indagine (vedi AnomalyDebugLog.h). -->
+    <div id="anomalyBanner" class="card"
+         style="background:var(--warn-soft);border:1px solid #f0d4a6;" hidden>
+      <h2 style="margin-top:0;">Anomalia conteggio IN/OUT</h2>
+      <pre id="anomalyBannerText" class="kv"></pre>
+      <div class="btn-row">
+        <a class="btn warn" href="/debug/anomalylog">Scarica log anomalie (CSV)</a>
+      </div>
+    </div>
     <div class="card">
       <h2>Menu</h2>
       <div class="btn-row">
@@ -485,6 +534,23 @@ void WebServerService::handleRoot() {
         document.getElementById('econ').textContent = econ.join('\n');
 
         document.getElementById('logs').textContent = (data.logs || []).join('\n');
+
+        // [ANOMALY_DEBUG] banner di segnalazione, rimuovere a fine indagine.
+        const anomaly = data.anomalyDebug || {};
+        const banner = document.getElementById('anomalyBanner');
+        if (anomaly.present) {
+          banner.hidden = false;
+          const times = anomaly.occurrenceCount === 1 ? 'volta' : 'volte';
+          const firstSaldoEuro = (Number(anomaly.firstImbalanceCents || 0) / 100).toFixed(2);
+          const latestSaldoEuro = (Number(anomaly.latestImbalanceCents || 0) / 100).toFixed(2);
+          document.getElementById('anomalyBannerText').textContent =
+            `Rilevata ${s(anomaly.occurrenceCount)} ${times}.\n` +
+            `Prima occorrenza: ${s(anomaly.firstTriggerDisplay) || 'n/d'}, saldo=${firstSaldoEuro} EUR.\n` +
+            `Piu' recente: ${s(anomaly.latestTriggerDisplay) || 'n/d'}, saldo=${latestSaldoEuro} EUR.\n` +
+            `Scarica il log per l'analisi, poi azzera la cattura da /debug/anomalyclear.`;
+        } else {
+          banner.hidden = true;
+        }
       } catch (e) {
         document.getElementById('wifiIndicator').textContent = 'WiFi: stato non disponibile';
         document.getElementById('wifi').textContent = 'Errore fetch /api/status';
@@ -536,6 +602,16 @@ void WebServerService::handleStatusPage() {
     </div>
   </div>
   <main>
+    <!-- [ANOMALY_DEBUG] banner + download log: rimuovere questo blocco e il
+         relativo codice JS a fine indagine (vedi AnomalyDebugLog.h). -->
+    <div id="anomalyBanner" class="card"
+         style="background:var(--warn-soft);border:1px solid #f0d4a6;" hidden>
+      <h2 style="margin-top:0;">Anomalia conteggio IN/OUT</h2>
+      <pre id="anomalyBannerText" class="kv"></pre>
+      <div class="btn-row">
+        <a class="btn warn" href="/debug/anomalylog">Scarica log anomalie (CSV)</a>
+      </div>
+    </div>
     <div class="grid-cards">
       <div class="card"><h2>WiFi</h2><pre id="wifi" class="kv">loading...</pre></div>
       <div class="card"><h2>MQTT</h2><pre id="mqttStatus" class="kv">loading...</pre></div>
@@ -547,6 +623,8 @@ void WebServerService::handleStatusPage() {
       <div class="btn-row">
         <a class="btn secondary" href="/">Menu</a>
         <a class="btn secondary" href="/livelli">Imposta livelli</a>
+        <!-- [ANOMALY_DEBUG] -->
+        <a class="btn secondary" href="/debug/anomalylog">Scarica log anomalie (CSV)</a>
       </div>
     </div>
     <details class="collapsible">
@@ -625,6 +703,23 @@ void WebServerService::handleStatusPage() {
         document.getElementById('econ').textContent = econ.join('\n');
 
         document.getElementById('logs').textContent = (data.logs || []).join('\n');
+
+        // [ANOMALY_DEBUG] banner di segnalazione, rimuovere a fine indagine.
+        const anomaly = data.anomalyDebug || {};
+        const banner = document.getElementById('anomalyBanner');
+        if (anomaly.present) {
+          banner.hidden = false;
+          const times = anomaly.occurrenceCount === 1 ? 'volta' : 'volte';
+          const firstSaldoEuro = (Number(anomaly.firstImbalanceCents || 0) / 100).toFixed(2);
+          const latestSaldoEuro = (Number(anomaly.latestImbalanceCents || 0) / 100).toFixed(2);
+          document.getElementById('anomalyBannerText').textContent =
+            `Rilevata ${s(anomaly.occurrenceCount)} ${times}.\n` +
+            `Prima occorrenza: ${s(anomaly.firstTriggerDisplay) || 'n/d'}, saldo=${firstSaldoEuro} EUR.\n` +
+            `Piu' recente: ${s(anomaly.latestTriggerDisplay) || 'n/d'}, saldo=${latestSaldoEuro} EUR.\n` +
+            `Scarica il log per l'analisi, poi azzera la cattura da /debug/anomalyclear.`;
+        } else {
+          banner.hidden = true;
+        }
       } catch (e) {
         document.getElementById('wifiIndicator').textContent = 'WiFi: stato non disponibile';
         document.getElementById('wifi').textContent = 'Errore fetch /api/status';
@@ -2214,6 +2309,102 @@ void WebServerService::handleHealth() {
   _server.send(200, "text/plain", "ok");
 }
 
+// [ANOMALY_DEBUG] handler di debug per la cattura anomalie IN/OUT. Rimuovere
+// questi 3 metodi + le route registrate in begin() + il file AnomalyDebugLog.h/.cpp
+// a fine indagine.
+void WebServerService::anomalyCsvRowVisitor(void* ctx,
+                                            anomalydebug::DeviceKind kind,
+                                            uint8_t addr,
+                                            uint8_t cmdHeader,
+                                            uint8_t eventCounter,
+                                            uint16_t deltaCents,
+                                            uint32_t tsMs,
+                                            int64_t wallClockEpoch) {
+  AnomalyCsvCtx* c = reinterpret_cast<AnomalyCsvCtx*>(ctx);
+  if (!c || !c->self) return;
+
+  char dateBuf[32];
+  anomalyFormatEpoch(wallClockEpoch, dateBuf, sizeof(dateBuf));
+
+  char line[160];
+  snprintf(line, sizeof(line), "%s;%s;%u;0x%02X;%u;%u;%lu;%s\r\n",
+           c->section, anomalyKindLabel(kind), addr, cmdHeader, eventCounter,
+           deltaCents, (unsigned long)tsMs, dateBuf);
+  c->self->_server.sendContent(line);
+}
+
+void WebServerService::handleDebugAnomalyLog() {
+  // Risposta in streaming (Content-Length sconosciuta -> chunked transfer):
+  // evita di materializzare in RAM un CSV che puo' arrivare a qualche
+  // migliaio di righe. Il browser la scarica come file grazie a
+  // Content-Disposition: attachment.
+  _server.sendHeader("Content-Disposition", "attachment; filename=\"anomaly_log.csv\"");
+  _server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  _server.send(200, "text/csv; charset=utf-8", "");
+  _server.sendContent("sezione;periferica;indirizzo;comando;counter;delta_cent;timestamp_ms;data_ora\r\n");
+
+  AnomalyCsvCtx ctx;
+  ctx.self = this;
+  ctx.section = "RAM";
+  for (uint8_t ch = 0; ch < anomalydebug::kChannelCount; ch++) {
+    anomalydebug::visitRamChannel(ch, &WebServerService::anomalyCsvRowVisitor, &ctx);
+  }
+
+  const anomalydebug::FramCaptureInfo info = anomalydebug::framCaptureInfo();
+  if (info.present) {
+    char firstDateBuf[32];
+    char latestDateBuf[32];
+    anomalyFormatEpoch(info.firstTriggerWallClockEpoch, firstDateBuf, sizeof(firstDateBuf));
+    anomalyFormatEpoch(info.latestTriggerWallClockEpoch, latestDateBuf, sizeof(latestDateBuf));
+    char header[256];
+    snprintf(header, sizeof(header),
+             "CATTURA;anomalia rilevata;occorrenze=%lu;prima_saldo_cent=%ld;prima=%s;"
+             "ultima_saldo_cent=%ld;ultima=%s\r\n",
+             (unsigned long)info.occurrenceCount,
+             (long)info.firstImbalanceCents, firstDateBuf,
+             (long)info.latestImbalanceCents, latestDateBuf);
+    _server.sendContent(header);
+
+    ctx.section = "FRAM-FIRST";
+    for (uint8_t ch = 0; ch < anomalydebug::kChannelCount; ch++) {
+      anomalydebug::visitFramChannel(anomalydebug::FRAM_SLOT_FIRST, ch, &WebServerService::anomalyCsvRowVisitor, &ctx);
+    }
+
+    ctx.section = "FRAM-LATEST";
+    for (uint8_t ch = 0; ch < anomalydebug::kChannelCount; ch++) {
+      anomalydebug::visitFramChannel(anomalydebug::FRAM_SLOT_LATEST, ch, &WebServerService::anomalyCsvRowVisitor, &ctx);
+    }
+  } else {
+    _server.sendContent("CATTURA;nessuna anomalia catturata finora\r\n");
+  }
+
+  _server.sendContent(""); // chiude la risposta chunked
+}
+
+void WebServerService::handleDebugAnomalyStatus() {
+  const anomalydebug::FramCaptureInfo info = anomalydebug::framCaptureInfo();
+  char line[256];
+  if (!info.present) {
+    snprintf(line, sizeof(line), "Nessuna anomalia catturata finora.");
+  } else {
+    char firstDateBuf[32];
+    char latestDateBuf[32];
+    anomalyFormatEpoch(info.firstTriggerWallClockEpoch, firstDateBuf, sizeof(firstDateBuf));
+    anomalyFormatEpoch(info.latestTriggerWallClockEpoch, latestDateBuf, sizeof(latestDateBuf));
+    snprintf(line, sizeof(line),
+             "Anomalia rilevata %lu volte. Prima: %s, saldo=%ld cent. Piu' recente: %s, saldo=%ld cent.",
+             (unsigned long)info.occurrenceCount,
+             firstDateBuf, (long)info.firstImbalanceCents,
+             latestDateBuf, (long)info.latestImbalanceCents);
+  }
+  _server.send(200, "text/plain; charset=utf-8", line);
+}
+
+void WebServerService::handleDebugAnomalyClear() {
+  anomalydebug::clearCapturedAnomaly();
+  _server.send(200, "text/plain; charset=utf-8", "OK: cattura riarmata.");
+}
+
 void WebServerService::appendLogsArrayJson(String& out, uint16_t limit) {
   // Estrae dal ring log solo il sottoinsieme richiesto, dal piu vecchio al piu nuovo.
   out += "[";
@@ -2380,6 +2571,36 @@ void WebServerService::handleApiStatus() {
 
   out += "\"logs\":";
   appendLogsArrayJson(out, RingLog::kCapacity);
+  out += ",";
+
+  // [ANOMALY_DEBUG] stato della cattura anomalie IN/OUT, per il banner in
+  // pagina di stato e il pulsante di download. Rimuovere questo blocco a
+  // fine indagine insieme al resto del modulo (vedi AnomalyDebugLog.h).
+  out += "\"anomalyDebug\":{";
+  {
+    const anomalydebug::FramCaptureInfo info = anomalydebug::framCaptureInfo();
+    out += "\"present\":";
+    out += (info.present ? "true" : "false");
+    out += ",\"occurrenceCount\":";
+    out += String((unsigned long)info.occurrenceCount);
+
+    out += ",\"firstImbalanceCents\":";
+    appendInt64(out, info.firstImbalanceCents);
+    out += ",\"firstTriggerDisplay\":\"";
+    char firstDateBuf[32];
+    anomalyFormatEpoch(info.firstTriggerWallClockEpoch, firstDateBuf, sizeof(firstDateBuf));
+    appendJsonEscaped(out, firstDateBuf);
+    out += "\"";
+
+    out += ",\"latestImbalanceCents\":";
+    appendInt64(out, info.latestImbalanceCents);
+    out += ",\"latestTriggerDisplay\":\"";
+    char latestDateBuf[32];
+    anomalyFormatEpoch(info.latestTriggerWallClockEpoch, latestDateBuf, sizeof(latestDateBuf));
+    appendJsonEscaped(out, latestDateBuf);
+    out += "\"";
+  }
+  out += "}";
 
   out += "}";
 

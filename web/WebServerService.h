@@ -10,6 +10,7 @@
 #include "../status/SystemStatus.h"
 #include "../net/WifiService.h"
 #include "../AppSettings.h"
+#include "../AnomalyDebugLog.h" // [ANOMALY_DEBUG]
 
 namespace ccms {
 
@@ -93,6 +94,20 @@ private:
   void handleApiTestConnection();
   void handleApiWifiTest();
   void handleApiEnterProgMode();
+  // [ANOMALY_DEBUG] recupero via web del log di debug anomalie IN/OUT (vedi
+  // AnomalyDebugLog.h). Rimuovere queste 3 dichiarazioni + le relative
+  // implementazioni/route a fine indagine.
+  void handleDebugAnomalyLog();
+  void handleDebugAnomalyStatus();
+  void handleDebugAnomalyClear();
+  static void anomalyCsvRowVisitor(void* ctx,
+                                   anomalydebug::DeviceKind kind,
+                                   uint8_t addr,
+                                   uint8_t cmdHeader,
+                                   uint8_t eventCounter,
+                                   uint16_t deltaCents,
+                                   uint32_t tsMs,
+                                   int64_t wallClockEpoch);
   void appendSettingsJson(String& out,
                           const AppSettings& settings,
                           bool presentCoinAcceptor,
