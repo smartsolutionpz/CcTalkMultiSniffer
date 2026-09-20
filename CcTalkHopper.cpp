@@ -175,6 +175,10 @@ void CcTalkHopper::updateState(const CcTalkTransaction& t) {
         state->payoutRequestValue = readU16LE(&req.data[3]);
         state->payoutRequestValid = true;
         state->pollSnapshotValid = false;
+        // Anche questo comando puo' avviare un'erogazione Azkoyen custom:
+        // senza questo reset, il primo status successivo (0x13/0x23)
+        // continuerebbe erroneamente dal progresso dell'episodio precedente.
+        state->azkoyenProgressAccountedValid = false;
       }
       return;
 
@@ -185,6 +189,20 @@ void CcTalkHopper::updateState(const CcTalkTransaction& t) {
         const uint16_t coinValue = knownCoinValue(*state);
         state->payoutRequestValue = (coinValue > 0) ? (uint16_t)(coinCount * coinValue) : coinCount;
         state->payoutRequestValid = true;
+        state->pollSnapshotValid = false;
+        state->azkoyenProgressAccountedValid = false;
+      }
+      return;
+
+    case 0x19:
+    case 0x34:
+      // Varianti di comando "svuotamento multiplo avviato" (vedi cmdDesc/
+      // printResponse: entrambe producono lo stesso ACK testuale di 0x20).
+      // Il payload di questi due header non e' mai stato interpretato in
+      // questo file (nessun campo noto/verificato): qui ci limitiamo a
+      // segnare il confine di un nuovo episodio, senza dedurre
+      // payoutRequestValue/Serial da byte di cui non conosciamo il formato.
+      if (_dataset.customCommandMode == HOPPER_CUSTOM_COMMANDS_AZKOYEN_DISCRIMINATOR) {
         state->pollSnapshotValid = false;
         state->azkoyenProgressAccountedValid = false;
       }
@@ -1216,16 +1234,36 @@ void CcTalkHopper::updateAzkoyenDispensedValue(HopperState& state,
   }
 
   const uint32_t paidBaseUnits = azkoyenPaidBaseUnits(state, code, type1Paid, type2Paid);
-  uint32_t deltaBaseUnits = paidBaseUnits;
-  if (state.azkoyenProgressAccountedValid &&
-      state.azkoyenProgressAccountedCode == code &&
-      paidBaseUnits >= state.azkoyenProgressPaidBaseUnits) {
-    deltaBaseUnits -= state.azkoyenProgressPaidBaseUnits;
-  }
 
+  // Il confine tra due erogazioni reali e' segnato esplicitamente dal reset
+  // di azkoyenProgressAccountedValid sui comandi che possono avviare
+  // un'erogazione (case 0xAA/0x86/0xA7/0x19/0x20/0x34/0x35 in updateState),
+  // non dal codice di stato qui ricevuto: lo stesso episodio puo' essere
+  // ri-osservato con un codice diverso (es. 0x24 via poll 0x13, poi 0x34 via
+  // "last command status" 0x23 per lo stesso payout) e non deve essere
+  // ri-accreditato per intero.
+  //
+  // Limite noto, non risolvibile qui: il payload di stato (0x13/0x15/0x23)
+  // non porta alcun identificativo dell'episodio a cui si riferisce. Se un
+  // 0x23 "in ritardo" del payout precedente arriva DOPO che il master ha
+  // gia' inviato una nuova richiesta (che ha quindi gia' azzerato il
+  // progresso), viene attribuito erroneamente al nuovo episodio e
+  // ri-accreditato: il watermark protegge solo all'interno di un episodio
+  // gia' correttamente delimitato, non l'attribuzione risposta->episodio.
+  uint32_t deltaBaseUnits = 0;
+  if (!state.azkoyenProgressAccountedValid) {
+    deltaBaseUnits = paidBaseUnits;
+  } else if (paidBaseUnits > state.azkoyenProgressPaidBaseUnits) {
+    deltaBaseUnits = paidBaseUnits - state.azkoyenProgressPaidBaseUnits;
+  }
+  // else: valore invariato o regredito entro lo stesso episodio
+  // (rumore/retry) -> nessun credito, il massimo gia' visto non si abbassa.
+
+  if (!state.azkoyenProgressAccountedValid || paidBaseUnits > state.azkoyenProgressPaidBaseUnits) {
+    state.azkoyenProgressPaidBaseUnits = paidBaseUnits;
+  }
   state.azkoyenProgressAccountedValid = true;
   state.azkoyenProgressAccountedCode = code;
-  state.azkoyenProgressPaidBaseUnits = paidBaseUnits;
 
   const uint16_t baseCoinValueCents = azkoyenBaseCoinValueCents(state);
   const uint32_t deltaValue = deltaBaseUnits * (uint32_t)baseCoinValueCents;
