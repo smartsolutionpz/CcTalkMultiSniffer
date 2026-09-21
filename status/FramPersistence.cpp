@@ -12,48 +12,101 @@ bool FramPersistence::begin(TwoWire& wire, uint8_t i2cAddress) {
   _wire = &wire;
   _i2cAddress = i2cAddress;
   _ready = _fram.begin(i2cAddress, &wire);
+  if (_ready) bootstrapSlots();
   return _ready;
+}
+
+bool FramPersistence::readSlot(uint16_t address, StoredLayout& out) {
+  // Tutta la struttura viene letta in RAM e validata prima di esporla al resto
+  // del sistema, cosi snapshot corrotti non contaminano lo stato runtime.
+  const uint32_t prevHz = _wire->getClock();
+  _wire->setClock(kFramI2cHz);
+  const bool ok = readBytes(address, reinterpret_cast<uint8_t*>(&out), sizeof(out));
+  _wire->setClock(prevHz);
+  if (!ok) return false;
+
+  if (out.magic != kMagic) return false;
+  if (out.version != kVersion) return false;
+  if (out.size != sizeof(StoredLayout)) return false;
+
+  const uint32_t expected = computeChecksum(reinterpret_cast<const uint8_t*>(&out),
+                                            offsetof(StoredLayout, checksum));
+  return out.checksum == expected;
+}
+
+void FramPersistence::bootstrapSlots() {
+  // Scansiona entrambi gli slot indipendentemente da load(), cosi il
+  // bookkeeping (slot da alternare, prossimo sequence number) e pronto anche
+  // se il chiamante invoca save()/saveFramNow() prima di un eventuale load().
+  StoredLayout a, b;
+  const bool aValid = readSlot(kSlotAAddress, a);
+  const bool bValid = readSlot(kSlotBAddress, b);
+
+  if (aValid && bValid) {
+    const bool bIsNewer = (int32_t)(b.seq - a.seq) > 0;
+    _lastGoodSlotAddress = bIsNewer ? kSlotBAddress : kSlotAAddress;
+    _nextSeq = (bIsNewer ? b.seq : a.seq) + 1;
+  } else if (aValid) {
+    _lastGoodSlotAddress = kSlotAAddress;
+    _nextSeq = a.seq + 1;
+  } else if (bValid) {
+    _lastGoodSlotAddress = kSlotBAddress;
+    _nextSeq = b.seq + 1;
+  } else {
+    // Nessuno slot valido: il primo save() scrivera in A (vedi default membri).
+    _lastGoodSlotAddress = kSlotBAddress;
+    _nextSeq = 1;
+  }
 }
 
 bool FramPersistence::load(Snapshot& out) {
   if (!_ready || !_wire) return false;
 
-  // Tutta la struttura viene letta in RAM e validata prima di esporla al resto
-  // del sistema, cosi snapshot corrotti non contaminano lo stato runtime.
-  StoredLayout raw;
-  const uint32_t prevHz = _wire->getClock();
-  _wire->setClock(kFramI2cHz);
-  const bool ok = readBytes(kBaseAddress, reinterpret_cast<uint8_t*>(&raw), sizeof(raw));
-  _wire->setClock(prevHz);
-  if (!ok) return false;
+  StoredLayout a, b;
+  const bool aValid = readSlot(kSlotAAddress, a);
+  const bool bValid = readSlot(kSlotBAddress, b);
 
-  if (raw.magic != kMagic) return false;
-  if (raw.version != kVersion) return false;
-  if (raw.size != sizeof(StoredLayout)) return false;
+  const StoredLayout* chosen = nullptr;
+  if (aValid && bValid) {
+    chosen = ((int32_t)(b.seq - a.seq) > 0) ? &b : &a;
+  } else if (aValid) {
+    chosen = &a;
+  } else if (bValid) {
+    chosen = &b;
+  } else {
+    return false;
+  }
 
-  const uint32_t expected = computeChecksum(reinterpret_cast<const uint8_t*>(&raw),
-                                            offsetof(StoredLayout, checksum));
-  if (raw.checksum != expected) return false;
-
-  storedToSnapshot(raw, out);
+  storedToSnapshot(*chosen, out);
   return true;
 }
 
 bool FramPersistence::save(const Snapshot& in) {
   if (!_ready || !_wire) return false;
 
+  // Ping-pong: si scrive sempre nello slot diverso dall'ultimo buono, cosi
+  // una perdita di alimentazione a meta scrittura lascia intatto lo stato
+  // precedente invece di invalidare l'unico snapshot persistito.
+  const uint16_t targetAddress =
+      (_lastGoodSlotAddress == kSlotAAddress) ? kSlotBAddress : kSlotAAddress;
+
   // Il checksum viene calcolato sul layout serializzato, non sullo snapshot
   // logico, per proteggere esattamente i byte memorizzati.
   StoredLayout raw;
   snapshotToStored(in, raw);
+  raw.seq = _nextSeq;
   raw.checksum = computeChecksum(reinterpret_cast<const uint8_t*>(&raw),
                                  offsetof(StoredLayout, checksum));
 
   const uint32_t prevHz = _wire->getClock();
   _wire->setClock(kFramI2cHz);
-  const bool ok = writeBytes(kBaseAddress, reinterpret_cast<const uint8_t*>(&raw), sizeof(raw));
+  const bool ok = writeBytes(targetAddress, reinterpret_cast<const uint8_t*>(&raw), sizeof(raw));
   _wire->setClock(prevHz);
-  return ok;
+  if (!ok) return false;
+
+  _lastGoodSlotAddress = targetAddress;
+  _nextSeq++;
+  return true;
 }
 
 uint32_t FramPersistence::computeChecksum(const uint8_t* data, size_t len) {

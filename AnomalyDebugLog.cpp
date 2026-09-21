@@ -47,7 +47,9 @@ struct __attribute__((packed)) FramChannelMeta {
 // per poter tenere DUE catture complete nei 32KB del chip MB85RC256V — vedi
 // static_assert piu' sotto per il conto esatto dei byte occupati. Regione
 // separata dallo snapshot economico esistente (status/FramPersistence.cpp),
-// che occupa i primi 173 byte a partire dall'indirizzo 0.
+// che ora occupa due slot (ping-pong) nei primi 512 byte a partire
+// dall'indirizzo 0 (vedi kSlotAAddress/kSlotBAddress/static_assert in
+// FramPersistence.h).
 struct __attribute__((packed)) FramHeader {
   uint32_t magic;
   uint16_t version;

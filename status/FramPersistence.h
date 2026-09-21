@@ -33,8 +33,11 @@ public:
 
 private:
   static const uint32_t kMagic = 0x43434652UL; // "CCFR"
-  static const uint16_t kVersion = 2;
-  static const uint16_t kBaseAddress = 0;
+  // v3: doppio slot con sequence number (v2 era singolo slot, non
+  // retrocompatibile: al primo boot post-aggiornamento lo snapshot v2
+  // viene scartato per mismatch di version/size, stesso fallback "avvio da
+  // zero" gia' esistente).
+  static const uint16_t kVersion = 3;
 
   struct __attribute__((packed)) StoredRecyclerEntry {
     uint8_t valid;
@@ -50,6 +53,7 @@ private:
     uint32_t magic;
     uint16_t version;
     uint16_t size;
+    uint32_t seq; // sequence number monotono, usato per scegliere lo slot piu recente
     uint32_t cntotBanconoteInCents;
     uint32_t cntotMoneteOutCents;
     uint32_t cntotMoneteInCents;
@@ -61,6 +65,16 @@ private:
     StoredRecyclerEntry recycler[SystemStatus::kMaxRecyclerEntries];
     uint32_t checksum;
   };
+
+  // Doppio slot (ping-pong): ogni save() scrive nello slot diverso
+  // dall'ultimo buono, cosi una perdita di alimentazione a meta scrittura
+  // lascia intatto lo slot precedente invece di invalidare l'unico stato
+  // persistito. Stesso pattern gia' usato da AnomalyDebugLog.cpp (che occupa
+  // la regione a partire da indirizzo 512).
+  static const uint16_t kSlotAAddress = 0;
+  static const uint16_t kSlotBAddress = sizeof(StoredLayout);
+  static_assert((uint32_t)kSlotBAddress + sizeof(StoredLayout) <= 512UL,
+                "FramPersistence: i due slot economici superano lo spazio riservato prima della regione AnomalyDebugLog (indirizzo 512)");
 
   // Clock I2C usato solo durante le operazioni FRAM. Il bus torna al valore
   // precedente subito dopo: il PCF8574 sulla stessa linea e garantito solo a
@@ -78,10 +92,22 @@ private:
   static void snapshotToStored(const Snapshot& in, StoredLayout& out);
   static void storedToSnapshot(const StoredLayout& in, Snapshot& out);
 
+  // Legge e valida (magic/version/size/checksum) un singolo slot, senza
+  // toccare lo stato di bookkeeping (_lastGoodSlotAddress/_nextSeq).
+  bool readSlot(uint16_t address, StoredLayout& out);
+  // Scansiona entrambi gli slot e inizializza _lastGoodSlotAddress/_nextSeq
+  // in base al piu recente valido trovato (o ai default se nessuno lo e).
+  // Chiamato da begin() cosi il bookkeeping e pronto anche se il chiamante
+  // non invoca mai load().
+  void bootstrapSlots();
+
   Adafruit_FRAM_I2C _fram;
   TwoWire* _wire = nullptr;
   uint8_t _i2cAddress = 0x50;
   bool _ready = false;
+
+  uint16_t _lastGoodSlotAddress = kSlotBAddress; // cosi il primo save() scrive lo slot A
+  uint32_t _nextSeq = 1;
 };
 
 } // namespace ccms

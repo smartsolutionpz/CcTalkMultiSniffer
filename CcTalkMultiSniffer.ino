@@ -2708,8 +2708,11 @@ static void flushFramIfDue() {
 
   ccms::FramPersistence::Snapshot snapshot;
   captureFramSnapshot(snapshot);
-  readFramDirtyState(dirty, snapshotGeneration);
-  if (!dirty) return;
+
+  bool stillDirty = false;
+  uint32_t currentGeneration = 0;
+  readFramDirtyState(stillDirty, currentGeneration);
+  if (!stillDirty) return;
 
   g_lastFramWriteMs = now;
   if (!g_framStore.save(snapshot)) {
@@ -2720,6 +2723,10 @@ static void flushFramIfDue() {
     return;
   }
 
+  // Confrontiamo con la generazione letta PRIMA della cattura dello snapshot,
+  // non con una riletta dopo: solo cosi una modifica arrivata durante la
+  // cattura fa fallire il confronto e lascia dirty=true, evitando di associare
+  // dati vecchi a uno stato gia considerato salvato (vedi markFramStateChanged).
   clearFramDirtyIfGenerationUnchanged(snapshotGeneration);
   if (g_framSaveErrorLatched) {
     logRuntimeLine("[FRAM] scrittura ripristinata", true);
@@ -2735,12 +2742,13 @@ static bool saveFramNow(String& message) {
     return false;
   }
 
-  ccms::FramPersistence::Snapshot snapshot;
-  captureFramSnapshot(snapshot);
   bool dirty = false;
   uint32_t snapshotGeneration = 0;
   readFramDirtyState(dirty, snapshotGeneration);
   (void)dirty;
+
+  ccms::FramPersistence::Snapshot snapshot;
+  captureFramSnapshot(snapshot);
 
   g_lastFramWriteMs = millis();
   if (!g_framStore.save(snapshot)) {
