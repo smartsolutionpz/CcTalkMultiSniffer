@@ -1250,8 +1250,28 @@ void CcTalkHopper::updateAzkoyenDispensedValue(HopperState& state,
   // progresso), viene attribuito erroneamente al nuovo episodio e
   // ri-accreditato: il watermark protegge solo all'interno di un episodio
   // gia' correttamente delimitato, non l'attribuzione risposta->episodio.
+  //
+  // azkoyenProgressAccountedValid==false ha pero' due origini diverse che qui
+  // vanno trattate diversamente:
+  // - confine di un nuovo episodio (azzerato da 0xAA/0x86/0xA7/0x19/0x34 in
+  //   updateState): e' corretto accreditare da subito il valore gia' pagato,
+  //   anche se il primo poll arriva quando l'hopper ha gia' fatto progressi.
+  // - primissima lettura di stato Azkoyen dall'avvio del firmware
+  //   (azkoyenStatusObservedSinceBoot ancora false): paidBaseUnits potrebbe
+  //   essere il risultato, gia' cache-ato dall'hopper, di un payout concluso
+  //   e gia' accreditato PRIMA di un riavvio del sistema (l'hopper conserva
+  //   l'ultimo stato anche a bordo spento, l'accounting invece e' solo in
+  //   RAM). Qui non si puo' distinguere "nuovo episodio" da "residuo di un
+  //   episodio gia' contato": per sicurezza si registra solo la baseline,
+  //   senza credito, stesso pattern di CcTalkCoinAcceptor::eventCounterSeen
+  //   e CcTalkBillValidator::eventCounterSeen.
+  const bool firstObservationSinceBoot = !state.azkoyenStatusObservedSinceBoot;
+  state.azkoyenStatusObservedSinceBoot = true;
+
   uint32_t deltaBaseUnits = 0;
-  if (!state.azkoyenProgressAccountedValid) {
+  if (firstObservationSinceBoot) {
+    // nessun credito, solo baseline (vedi commento sopra)
+  } else if (!state.azkoyenProgressAccountedValid) {
     deltaBaseUnits = paidBaseUnits;
   } else if (paidBaseUnits > state.azkoyenProgressPaidBaseUnits) {
     deltaBaseUnits = paidBaseUnits - state.azkoyenProgressPaidBaseUnits;

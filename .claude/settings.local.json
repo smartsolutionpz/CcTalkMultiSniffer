@@ -18,7 +18,8 @@
       "Bash(Sort-Object)",
       "WebFetch(domain:forum.seeedstudio.com)",
       "Bash(find \"C:/Users/peppe/.platformio/packages\" -name \"sdkconfig.h\" 2>/dev/null | grep -i \"c6\\\\|esp32c6\" | head -5)",
-      "Read(//c/Users/peppe/.platformio/packages/**)"
+      "Read(//c/Users/peppe/.platformio/packages/**)",
+      "Bash(git --no-pager diff CcTalkHopper.cpp CcTalkHopper.h)"
     ]
   }
 }

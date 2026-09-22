@@ -110,6 +110,12 @@ public:
     uint8_t azkoyenProgressAccountedCode = 0;
     uint32_t azkoyenProgressPaidBaseUnits = 0;
     uint16_t azkoyenRequestBaseUnits = 0;
+    // Impostato una sola volta, alla prima lettura di stato Azkoyen
+    // (0x13/0x15/0x23) dopo l'avvio del firmware; MAI azzerato ai confini di
+    // episodio (a differenza di azkoyenProgressAccountedValid). Distingue
+    // "inizio di un nuovo episodio" da "primo dato disponibile dopo un
+    // riavvio", vedi commento in updateAzkoyenDispensedValue().
+    bool azkoyenStatusObservedSinceBoot = false;
 
     bool payoutRequestValid = false;
     uint32_t payoutRequestSerial = 0;
