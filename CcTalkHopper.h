@@ -30,7 +30,8 @@ public:
     DISPENSE_SOURCE_NONE = 0,
     DISPENSE_SOURCE_A6_AZKOYEN = 1,      // 0xA6 con statusMode AZKOYEN_TYPE1_PAYOUT_COUNTER
     DISPENSE_SOURCE_POLL_GENERIC = 2,    // 0xAB / 0x85
-    DISPENSE_SOURCE_AZKOYEN_CUSTOM = 3   // 0x13 / 0x15 / 0x23
+    DISPENSE_SOURCE_AZKOYEN_CUSTOM = 3,  // 0x13 / 0x15 / 0x23
+    DISPENSE_SOURCE_SMART_HOPPER_STATUS = 4 // 0x1D / 0x2F (ITL CC2)
   };
 
   // Associazione tra indice coin table e valore monetario dichiarato dal device.
@@ -116,6 +117,29 @@ public:
     // "inizio di un nuovo episodio" da "primo dato disponibile dopo un
     // riavvio", vedi commento in updateAzkoyenDispensedValue().
     bool azkoyenStatusObservedSinceBoot = false;
+
+    // ITL Smart Hopper (CC2). Un "episodio" di erogazione si apre con l'ACK
+    // di un comando payout (0x16/0x27/0x20/0x2C) e si chiude con un evento
+    // finale (Dispensed/Halted/Timeout/Fraud/Incomplete Payout) letto da
+    // Request Status (0x1D/0x2F). Il valore degli eventi e cumulativo
+    // nell'episodio: si accredita solo la parte eccedente smartEpisodeCredited.
+    bool smartEpisodeActive = false;
+    uint32_t smartEpisodeCredited = 0;
+    bool smartPayoutRequestValid = false;
+    uint32_t smartPayoutRequestValue = 0;
+    bool smartEventCountValid = false;
+    uint8_t smartEventCount = 0;
+    bool smartLastEventValid = false;
+    uint8_t smartLastEventCode = 0;
+    // Totali solo informativi (non entrano nei contatori economici): monete
+    // mandate in cassa durante un payout e monete inserite dalla gettoniera
+    // collegata direttamente allo Smart Hopper.
+    uint32_t smartCashboxPaidTotal = 0;
+    uint32_t smartCoinCreditTotal = 0;
+    bool smartMinPayoutValid = false;
+    uint32_t smartMinPayout = 0;
+    bool smartPayoutOptionsValid = false;
+    uint8_t smartPayoutOptions[2] = {0};
 
     bool payoutRequestValid = false;
     uint32_t payoutRequestSerial = 0;
@@ -261,6 +285,20 @@ private:
   bool coinValueAccepted(const HopperState& state, uint16_t valueCents, CoinFilterReason& reason) const;
   void updateDispensedFromPoll(HopperState& state, uint8_t cmdHeader, uint8_t eventCounter,
                                 uint16_t remaining, uint16_t paid, uint16_t unpaid);
+
+  // ITL Smart Hopper (CC2), implementati in CcTalkHopperSmartHopper.cpp.
+  // Gli hook ritornano true se hanno gestito il comando; false lascia la
+  // decodifica ccTalk generica.
+  bool smartHopperEnabled() const;
+  const __FlashStringHelper* smartHopperCmdDesc(uint8_t hdr) const;
+  bool updateSmartHopperState(HopperState& state, const CcTalkFrame& req, const CcTalkFrame& resp);
+  bool printSmartHopperRequestPayload(Stream& out, const CcTalkFrame& req) const;
+  bool printSmartHopperResponse(Stream& out, uint8_t hostHdr, const CcTalkFrame& resp) const;
+  void processSmartHopperStatus(HopperState& state, uint8_t hdr, const uint8_t* data, uint8_t len);
+  void printSmartHopperStatus(Stream& out, uint8_t hdr, const uint8_t* data, uint8_t len) const;
+  void applySmartHopperPayoutProgress(HopperState& state, uint8_t hdr, uint8_t eventCode,
+                                      uint32_t value, bool finalEvent);
+  void dumpSmartHopperState(Stream& out, const HopperState& s) const;
   void updateState(const CcTalkTransaction& t);
   HopperState* mutableStateFor(uint8_t addr);
 };

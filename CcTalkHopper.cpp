@@ -104,6 +104,8 @@ void CcTalkHopper::updateState(const CcTalkTransaction& t) {
   const CcTalkFrame& req = t.req;
   const CcTalkFrame& resp = t.resp;
 
+  if (smartHopperEnabled() && updateSmartHopperState(*state, req, resp)) return;
+
   switch (req.hdr) {
     case 0xF6:
       copyAsciiSanitized(state->manufacturer, sizeof(state->manufacturer), resp.data, resp.dataLen);
@@ -443,6 +445,9 @@ void CcTalkHopper::dumpState(Stream& out) const {
       case DISPENSE_SOURCE_AZKOYEN_CUSTOM:
         out.println(F(" [fonte: 0x13/0x15/0x23]"));
         break;
+      case DISPENSE_SOURCE_SMART_HOPPER_STATUS:
+        out.println(F(" [fonte: 0x1D/0x2F]"));
+        break;
       default:
         out.println();
         break;
@@ -474,6 +479,7 @@ void CcTalkHopper::dumpState(Stream& out) const {
       printValueAsEuro(out, s.lastDispenseStepValue);
       out.println(F(")"));
     }
+    if (smartHopperEnabled()) dumpSmartHopperState(out, s);
 
     if (s.manufacturerValid) {
       out.print(F("    manufacturer=\""));
@@ -600,6 +606,10 @@ void CcTalkHopper::dumpState(Stream& out) const {
 
 const __FlashStringHelper* CcTalkHopper::cmdDesc(uint8_t hdr) const {
   // Catalogo specifico hopper.
+  if (smartHopperEnabled()) {
+    const __FlashStringHelper* smartDesc = smartHopperCmdDesc(hdr);
+    if (smartDesc) return smartDesc;
+  }
   switch (hdr) {
     case 0x29:
       if (_dataset.customCommandMode == HOPPER_CUSTOM_COMMANDS_AZKOYEN_DISCRIMINATOR) {
@@ -684,6 +694,19 @@ const __FlashStringHelper* CcTalkHopper::cmdDesc(uint8_t hdr) const {
 
 void CcTalkHopper::printRequestPayload(Stream& out, const CcTalkFrame& req) {
   // Interpreta i payload che aggiungono significato operativo ai comandi.
+  if (smartHopperEnabled()) {
+    if (printSmartHopperRequestPayload(out, req)) return;
+    // Header CC2 con payload non interpretabile: mai lasciarlo ai rami
+    // Azkoyen/ccTalk che condividono lo stesso codice.
+    if (smartHopperCmdDesc(req.hdr)) {
+      if (req.dataLen) {
+        out.print(F("  payload raw: "));
+        dumpHex(out, req.data, req.dataLen);
+        out.println();
+      }
+      return;
+    }
+  }
   switch (req.hdr) {
     case 0xA4:
       if (req.dataLen == 1) {
@@ -1390,6 +1413,8 @@ void CcTalkHopper::printResponse(Stream& out, uint8_t hostHdr, const CcTalkFrame
   out.print(F("HOPPER["));
   out.print(resp.src);
   out.print(F("] -> MASTER: "));
+
+  if (smartHopperEnabled() && printSmartHopperResponse(out, hostHdr, resp)) return;
 
   if (resp.hdr == 0x05) { out.println(F("NAK")); return; }
   if (resp.hdr == 0x06) { out.println(F("BUSY")); return; }

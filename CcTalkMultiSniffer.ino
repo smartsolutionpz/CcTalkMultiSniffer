@@ -57,6 +57,7 @@
 #include "CcTalkHopperAlbericiEvolution.h"
 #include "CcTalkHopperAzkoyenDiscriminator.h"
 #include "CcTalkHopperSuzoEvolution.h"
+#include "CcTalkHopperSmartHopper.h"
 #include "CcTalkBillValidatorIPRO.h"
 #include "CcTalkBillValidatorMD100.h"
 #include "CcTalkBillValidatorSmartPayout.h"
@@ -226,6 +227,7 @@ static CounterTracker g_coinEventTrack;
 static CounterTracker g_hopperEventTrack[8];   // addr 3..10
 static HopperPollTracker g_hopperPollTrack[8]; // addr 3..10
 static HopperStatusTracker g_hopperStatusTrack[8]; // addr 3..10, A6 Azkoyen
+static PayloadTracker g_hopperSmartStatusTrack[8]; // addr 3..10, 1D/2F Smart Hopper
 static CounterTracker g_bvEventTrack[11];      // addr 40..50
 static PayloadTracker g_bvStatusTrack[11];     // addr 40..50
 static bool g_mdcesSeen[256] = {false};
@@ -302,6 +304,7 @@ CcTalkHopperAlbericiHopperCd g_hopperAlbericiHopperCd;
 CcTalkHopperAlbericiEvolution g_hopperAlbericiEvolution;
 CcTalkHopperAzkoyenDiscriminator g_hopperAzkoyenDiscriminator;
 CcTalkHopperSuzoEvolution g_hopperSuzoEvolution;
+CcTalkHopperSmartHopper g_hopperSmartHopper;
 CcTalkBillValidatorIPRO g_billValidatorIpro;
 CcTalkBillValidatorMD100 g_billValidatorMd100;
 CcTalkBillValidatorSmartPayout g_billValidatorSmartPayout;
@@ -936,6 +939,8 @@ static const char* hopperModelLabel(uint8_t model) {
       return "AzkoyenDiscriminator";
     case ccms::HOPPER_MODEL_SUZO_EVOLUTION:
       return "SuzoEvolution";
+    case ccms::HOPPER_MODEL_SMART_HOPPER:
+      return "SmartHopper";
     default:
       return "UNKNOWN";
   }
@@ -972,6 +977,9 @@ static uint8_t configuredHopperModelForAddress(const ccms::AppSettings& settings
   if ((settings.hopperSuzoEvolutionMask & bit) != 0) {
     return ccms::HOPPER_MODEL_SUZO_EVOLUTION;
   }
+  if ((settings.hopperSmartHopperMask & bit) != 0) {
+    return ccms::HOPPER_MODEL_SMART_HOPPER;
+  }
   return 0;
 }
 
@@ -1002,6 +1010,8 @@ static CcTalkHopper* hopperParserForAddress(uint8_t addr) {
       return &g_hopperAlbericiEvolution;
     case ccms::HOPPER_MODEL_ALBERICI_DISCRIMINATOR:
       return &g_hopperAlbericiDiscriminator;
+    case ccms::HOPPER_MODEL_SMART_HOPPER:
+      return &g_hopperSmartHopper;
     default:
       return nullptr;
   }
@@ -1043,6 +1053,8 @@ static void normalizeDeviceModelSettings(ccms::AppSettings& settings) {
       ccms::sanitizeHopperModelAssignmentMask(settings.hopperSuzoEvolutionMask);
   settings.hopperAlbericiEvolutionMask =
       ccms::sanitizeHopperModelAssignmentMask(settings.hopperAlbericiEvolutionMask);
+  settings.hopperSmartHopperMask =
+      ccms::sanitizeHopperModelAssignmentMask(settings.hopperSmartHopperMask);
   settings.billValidatorMd100Mask =
       ccms::sanitizeBillValidatorModelAssignmentMask(settings.billValidatorMd100Mask);
   settings.billValidatorSmartPayoutMask =
@@ -1066,6 +1078,9 @@ static void normalizeDeviceModelSettings(ccms::AppSettings& settings) {
   settings.hopperAlbericiEvolutionMask =
       (uint8_t)(settings.hopperAlbericiEvolutionMask & (uint8_t)~assignedHopperMask);
   assignedHopperMask |= settings.hopperAlbericiEvolutionMask;
+  settings.hopperSmartHopperMask =
+      (uint8_t)(settings.hopperSmartHopperMask & (uint8_t)~assignedHopperMask);
+  assignedHopperMask |= settings.hopperSmartHopperMask;
 
   const uint16_t billValidatorOverlap =
       (uint16_t)(settings.billValidatorMd100Mask & settings.billValidatorSmartPayoutMask);
@@ -1086,7 +1101,10 @@ static void normalizeDeviceModelSettings(ccms::AppSettings& settings) {
         (uint16_t)(settings.billValidatorIproMask & (uint16_t)~billValidatorIproVsSmartOverlap);
   }
 
-  if (settings.hopperAzkoyenDiscriminatorMask != 0 &&
+  if (settings.hopperSmartHopperMask != 0 &&
+      settings.hopperSmartHopperMask == assignedHopperMask) {
+    settings.hopperModel = ccms::HOPPER_MODEL_SMART_HOPPER;
+  } else if (settings.hopperAzkoyenDiscriminatorMask != 0 &&
       settings.hopperAlbericiDiscriminatorMask == 0 &&
       settings.hopperAlbericiHopperCdMask == 0 &&
       settings.hopperAlbericiEvolutionMask == 0 &&
@@ -1134,6 +1152,7 @@ static void selectDeviceModelsFromSettings() {
   g_hopperAlbericiEvolution.setAddressMask(g_runtimeDeviceSettings.hopperAlbericiEvolutionMask);
   g_hopperAzkoyenDiscriminator.setAddressMask(g_runtimeDeviceSettings.hopperAzkoyenDiscriminatorMask);
   g_hopperSuzoEvolution.setAddressMask(g_runtimeDeviceSettings.hopperSuzoEvolutionMask);
+  g_hopperSmartHopper.setAddressMask(g_runtimeDeviceSettings.hopperSmartHopperMask);
   g_billValidatorIpro.setAddressMask(g_runtimeDeviceSettings.billValidatorIproMask);
   g_billValidatorMd100.setAddressMask(g_runtimeDeviceSettings.billValidatorMd100Mask);
   g_billValidatorMd100.setRecyclerInventoryCommandEnabled(
@@ -1181,7 +1200,8 @@ static void normalizeCounterRoutingSettings(ccms::AppSettings& settings) {
                 settings.hopperAlbericiHopperCdMask |
                 settings.hopperAlbericiEvolutionMask |
                 settings.hopperAzkoyenDiscriminatorMask |
-                settings.hopperSuzoEvolutionMask);
+                settings.hopperSuzoEvolutionMask |
+                settings.hopperSmartHopperMask);
   const uint16_t configuredBillValidatorMask =
       (uint16_t)(settings.billValidatorMd100Mask |
                  settings.billValidatorSmartPayoutMask |
@@ -1333,6 +1353,7 @@ static bool onWebSaveSettings(const ccms::AppSettings& in, String& message, void
       (next.hopperAlbericiEvolutionMask != g_appSettings.hopperAlbericiEvolutionMask) ||
       (next.hopperAzkoyenDiscriminatorMask != g_appSettings.hopperAzkoyenDiscriminatorMask) ||
       (next.hopperSuzoEvolutionMask != g_appSettings.hopperSuzoEvolutionMask) ||
+      (next.hopperSmartHopperMask != g_appSettings.hopperSmartHopperMask) ||
       (next.billValidatorMd100Mask != g_appSettings.billValidatorMd100Mask) ||
       (next.billValidatorSmartPayoutMask != g_appSettings.billValidatorSmartPayoutMask) ||
       (next.billValidatorIproMask != g_appSettings.billValidatorIproMask);
@@ -1592,6 +1613,7 @@ static void printRuntimeState() {
   g_hopperAlbericiHopperCd.dumpState(Serial);
   g_hopperAzkoyenDiscriminator.dumpState(Serial);
   g_hopperSuzoEvolution.dumpState(Serial);
+  g_hopperSmartHopper.dumpState(Serial);
   g_billValidatorIpro.dumpState(Serial);
   g_billValidatorMd100.dumpState(Serial);
   g_billValidatorSmartPayout.dumpState(Serial);
@@ -1765,6 +1787,32 @@ static bool isAzkoyenDatasetCommandHeader(uint8_t hdr) {
   }
 }
 
+// Comandi "operativi" ITL Smart Hopper (CC2) da mostrare sempre in modalita 3.
+// Molti header coincidono con quelli custom Azkoyen: la scelta dipende dal
+// modello assegnato all'indirizzo. Lo stato 0x1D/0x2F passa invece dal filtro
+// per cambiamento in shouldPrintByCounter.
+static bool isSmartHopperDatasetCommandHeader(uint8_t hdr) {
+  switch (hdr) {
+    case 0x14: case 0x25: // set routing
+    case 0x16: case 0x27: // payout amount
+    case 0x17: case 0x28: // float amount
+    case 0x18:            // empty
+    case 0x1B: case 0x2B: // set denomination amount
+    case 0x1C: case 0x2E: // get device setup
+    case 0x1E:            // set payout options
+    case 0x20: case 0x2C: // payout by denomination
+    case 0x21: case 0x2D: // float by denomination
+    case 0x22:            // run unit calibration
+    case 0x30: case 0x32: // peripheral inhibit
+    case 0x33:            // smart empty
+    case 0x34:            // cashbox operation data
+    case 0x40:            // halt
+      return true;
+    default:
+      return false;
+  }
+}
+
 static bool isBillValidatorDatasetSpecificHeader(uint8_t hdr) {
   switch (hdr) {
     case 0x61: // MD100 payout/transfer bill
@@ -1823,6 +1871,7 @@ static bool shouldUseRawOnlyOutput(const CcTalkTransaction& t) {
   if (ccms::isValidHopperAddress(addr)) {
     const uint8_t model = configuredHopperModelForAddress(g_runtimeDeviceSettings, addr);
     if (model == 0) return true;
+    if (model == ccms::HOPPER_MODEL_SMART_HOPPER) return false;
     if (t.hasReq && isAzkoyenDatasetCommandHeader(hdr) &&
         model != ccms::HOPPER_MODEL_AZKOYEN_DISCRIMINATOR) {
       return true;
@@ -1874,7 +1923,13 @@ static void autoAssignIproRuntimeAddress(uint8_t addr) {
 }
 
 static bool shouldPrintDatasetSpecificByAddress(uint8_t addr, uint8_t hdr) {
-  if (ccms::isValidHopperAddress(addr)) return isAzkoyenDatasetCommandHeader(hdr);
+  if (ccms::isValidHopperAddress(addr)) {
+    if (configuredHopperModelForAddress(g_runtimeDeviceSettings, addr) ==
+        ccms::HOPPER_MODEL_SMART_HOPPER) {
+      return isSmartHopperDatasetCommandHeader(hdr);
+    }
+    return isAzkoyenDatasetCommandHeader(hdr);
+  }
   if (ccms::isValidBillValidatorAddress(addr)) {
     return isBillValidatorDatasetSpecificHeader(hdr) && hdr != 0x1D;
   }
@@ -1976,6 +2031,35 @@ static bool shouldPrintByCounter(const CcTalkTransaction& t) {
     }
 
     if (sameAsPrevious && !isCreditStatus) return false;
+    return !idleStatus;
+  }
+
+  // Smart Hopper: Request Status (0x1D/0x2F) e interrogato di continuo.
+  // Stesso criterio del Smart Payout: si stampa solo se non idle e cambiato,
+  // oppure se contiene un evento monetario "una tantum" (due payout identici
+  // consecutivi darebbero lo stesso payload). Dispensing si ripete a ogni poll
+  // durante l'erogazione e resta soggetto al filtro per cambiamento.
+  if ((hdr == 0x1D || hdr == 0x2F) && ccms::isValidHopperAddress(addr) &&
+      configuredHopperModelForAddress(g_runtimeDeviceSettings, addr) ==
+          ccms::HOPPER_MODEL_SMART_HOPPER) {
+    if (t.resp.dataLen == 0) return false;
+
+    const bool idleStatus = (t.resp.dataLen == 1 && t.resp.data[0] == 0x00);
+    const uint8_t first = t.resp.data[0];
+    const bool isMoneyStatus = (first == 0x02 || first == 0x06 ||
+                                first == 0x09 || first == 0x0A || first == 0x0C ||
+                                first == 0x0D || first == 0x10);
+    PayloadTracker& tr = g_hopperSmartStatusTrack[(uint8_t)(addr - ccms::kHopperAddressMin)];
+    const uint8_t len = (t.resp.dataLen > sizeof(tr.data)) ? (uint8_t)sizeof(tr.data) : t.resp.dataLen;
+    const bool sameAsPrevious = tr.valid &&
+                                tr.len == len &&
+                                memcmp(tr.data, t.resp.data, len) == 0;
+
+    tr.valid = true;
+    tr.len = len;
+    memcpy(tr.data, t.resp.data, len);
+
+    if (sameAsPrevious && !isMoneyStatus) return false;
     return !idleStatus;
   }
 
@@ -3700,6 +3784,7 @@ static void initCcTalkSniffer() {
   g_hopperAlbericiEvolution.resetState();
   g_hopperAzkoyenDiscriminator.resetState();
   g_hopperSuzoEvolution.resetState();
+  g_hopperSmartHopper.resetState();
   g_billValidatorIpro.resetState();
   g_billValidatorMd100.resetState();
   g_billValidatorSmartPayout.resetState();
@@ -3711,6 +3796,7 @@ static void initCcTalkSniffer() {
   g_router.add(&g_hopperAlbericiEvolution);
   g_router.add(&g_hopperAzkoyenDiscriminator);
   g_router.add(&g_hopperSuzoEvolution);
+  g_router.add(&g_hopperSmartHopper);
   g_router.add(&g_billValidatorIpro);
   g_router.add(&g_billValidatorMd100);
   g_router.add(&g_billValidatorSmartPayout);

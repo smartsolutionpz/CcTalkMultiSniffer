@@ -17,7 +17,8 @@ enum HopperModelType : uint8_t {
   HOPPER_MODEL_ALBERICI_HOPPERCD = 2,
   HOPPER_MODEL_SUZO_EVOLUTION = 3,
   HOPPER_MODEL_AZKOYEN_DISCRIMINATOR = 4,
-  HOPPER_MODEL_ALBERICI_EVOLUTION = 5
+  HOPPER_MODEL_ALBERICI_EVOLUTION = 5,
+  HOPPER_MODEL_SMART_HOPPER = 6
 };
 
 // Enumerazione dei modelli bill validator supportati.
@@ -43,7 +44,8 @@ inline bool isValidHopperModel(uint8_t model) {
          model == HOPPER_MODEL_ALBERICI_HOPPERCD ||
          model == HOPPER_MODEL_SUZO_EVOLUTION ||
          model == HOPPER_MODEL_AZKOYEN_DISCRIMINATOR ||
-         model == HOPPER_MODEL_ALBERICI_EVOLUTION;
+         model == HOPPER_MODEL_ALBERICI_EVOLUTION ||
+         model == HOPPER_MODEL_SMART_HOPPER;
 }
 
 inline bool isValidBillValidatorModel(uint8_t model) {
@@ -236,6 +238,7 @@ struct AppSettings {
   uint8_t hopperSuzoEvolutionMask = 0;
   uint8_t hopperAzkoyenDiscriminatorMask = 0;
   uint8_t hopperAlbericiEvolutionMask = 0;
+  uint8_t hopperSmartHopperMask = 0;
   uint16_t billValidatorMd100Mask = kAllBillValidatorMask;
   uint16_t billValidatorSmartPayoutMask = 0;
   uint16_t billValidatorIproMask = 0;
@@ -280,6 +283,7 @@ struct AppSettings {
     hopperSuzoEvolutionMask = 0;
     hopperAzkoyenDiscriminatorMask = 0;
     hopperAlbericiEvolutionMask = 0;
+    hopperSmartHopperMask = 0;
     billValidatorMd100Mask = kAllBillValidatorMask;
     billValidatorSmartPayoutMask = 0;
     billValidatorIproMask = 0;

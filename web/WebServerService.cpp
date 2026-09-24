@@ -1518,7 +1518,8 @@ void WebServerService::handleSettingsJs() {
           { value: 2, label: 'Hopper Alberici HopperCD' },
           { value: 3, label: 'Hopper Suzo Evolution' },
           { value: 4, label: 'Hopper Azkoyen Discriminator' },
-          { value: 5, label: 'Hopper Alberici Evolution' }
+          { value: 5, label: 'Hopper Alberici Evolution' },
+          { value: 6, label: 'Hopper ITL Smart Hopper' }
         ];
       }
       if (device.family === 'bill_validator') {
@@ -1916,8 +1917,10 @@ void WebServerService::handleSettingsJs() {
 
       renderMaskOptions('coinInHopperMaskGroup', 'coinInHopperMask', hopperAddrs, (addr) => `Hopper indirizzo ${addr}`);
       renderMaskOptions('coinOutHopperMaskGroup', 'coinOutHopperMask', hopperAddrs, (addr) => `Hopper indirizzo ${addr}`);
+      // 6 = HOPPER_MODEL_SMART_HOPPER: multimoneta, riporta gia i valori in
+      // centesimi, il filtro taglio non si applica.
       renderHopperCoinValueOptions(
-        hopperAddrs,
+        hopperAddrs.filter((addr) => selectedModelForAddress(addr) !== 6),
         hasHopperCoinValueInputs ? currentSelections.hopperCoinValueCents : settings.hopperCoinValueCents);
       renderHopperSorterExcludedPathOptions(
         evolutionHopperAddrs,
@@ -2083,6 +2086,7 @@ void WebServerService::handleSettingsJs() {
         const hopperModel3Mask = buildModelMask('hopper', 3, 3);
         const hopperModel4Mask = buildModelMask('hopper', 4, 3);
         const hopperModel5Mask = buildModelMask('hopper', 5, 3);
+        const hopperModel6Mask = buildModelMask('hopper', 6, 3);
         const billValidatorModel1Mask = buildModelMask('bill_validator', 1, 40);
         const billValidatorModel2Mask = buildModelMask('bill_validator', 2, 40);
         const billValidatorModel3Mask = buildModelMask('bill_validator', 3, 40);
@@ -2093,10 +2097,13 @@ void WebServerService::handleSettingsJs() {
         params.set('hopperSuzoEvolutionMask', hopperModel3Mask);
         params.set('hopperAzkoyenDiscriminatorMask', hopperModel4Mask);
         params.set('hopperAlbericiEvolutionMask', hopperModel5Mask);
+        params.set('hopperSmartHopperMask', hopperModel6Mask);
         params.set('billValidatorMd100Mask', billValidatorModel1Mask);
         params.set('billValidatorSmartPayoutMask', billValidatorModel2Mask);
         params.set('billValidatorIproMask', billValidatorModel3Mask);
-        params.set('hopperModel',
+        const onlyHopperModel6 = hopperModel6Mask !== '0' && hopperModel1Mask === '0' && hopperModel2Mask === '0' &&
+          hopperModel3Mask === '0' && hopperModel4Mask === '0' && hopperModel5Mask === '0';
+        params.set('hopperModel', onlyHopperModel6 ? '6' :
           hopperModel4Mask !== '0' && hopperModel1Mask === '0' && hopperModel2Mask === '0' && hopperModel3Mask === '0' && hopperModel5Mask === '0'
             ? '4'
             : (hopperModel5Mask !== '0' && hopperModel1Mask === '0' && hopperModel2Mask === '0' && hopperModel3Mask === '0'
@@ -2136,6 +2143,7 @@ void WebServerService::handleSettingsJs() {
         params.set('hopperSuzoEvolutionMask', String(Number(L.hopperSuzoEvolutionMask) || 0));
         params.set('hopperAzkoyenDiscriminatorMask', String(Number(L.hopperAzkoyenDiscriminatorMask) || 0));
         params.set('hopperAlbericiEvolutionMask', String(Number(L.hopperAlbericiEvolutionMask) || 0));
+        params.set('hopperSmartHopperMask', String(Number(L.hopperSmartHopperMask) || 0));
         params.set('billValidatorMd100Mask', String(Number(L.billValidatorMd100Mask) || 0));
         params.set('billValidatorSmartPayoutMask', String(Number(L.billValidatorSmartPayoutMask) || 0));
         params.set('billValidatorIproMask', String(Number(L.billValidatorIproMask) || 0));
@@ -2886,6 +2894,8 @@ void WebServerService::appendSettingsJson(String& out,
   out += String((unsigned)settings.hopperAzkoyenDiscriminatorMask);
   out += ",\"hopperAlbericiEvolutionMask\":";
   out += String((unsigned)settings.hopperAlbericiEvolutionMask);
+  out += ",\"hopperSmartHopperMask\":";
+  out += String((unsigned)settings.hopperSmartHopperMask);
   out += ",\"billValidatorMd100Mask\":";
   out += String((unsigned)settings.billValidatorMd100Mask);
   out += ",\"billValidatorSmartPayoutMask\":";
@@ -3019,7 +3029,8 @@ bool WebServerService::parseSettingsFromRequest(AppSettings& out, String& messag
       hopperModel != (long)HOPPER_MODEL_ALBERICI_HOPPERCD &&
       hopperModel != (long)HOPPER_MODEL_SUZO_EVOLUTION &&
       hopperModel != (long)HOPPER_MODEL_AZKOYEN_DISCRIMINATOR &&
-      hopperModel != (long)HOPPER_MODEL_ALBERICI_EVOLUTION) {
+      hopperModel != (long)HOPPER_MODEL_ALBERICI_EVOLUTION &&
+      hopperModel != (long)HOPPER_MODEL_SMART_HOPPER) {
     message = "hopperModel non valido";
     return false;
   }
@@ -3081,6 +3092,16 @@ bool WebServerService::parseSettingsFromRequest(AppSettings& out, String& messag
     if (!parseUnsignedLongStrict(_server.arg("hopperAlbericiEvolutionMask"), hopperAlbericiEvolutionMask) ||
         hopperAlbericiEvolutionMask > 0xFFUL) {
       message = "hopperAlbericiEvolutionMask non valido";
+      return false;
+    }
+  }
+
+  unsigned long hopperSmartHopperMask =
+      (hopperModel == (long)HOPPER_MODEL_SMART_HOPPER) ? (unsigned long)kAllHopperMask : 0UL;
+  if (_server.hasArg("hopperSmartHopperMask")) {
+    if (!parseUnsignedLongStrict(_server.arg("hopperSmartHopperMask"), hopperSmartHopperMask) ||
+        hopperSmartHopperMask > 0xFFUL) {
+      message = "hopperSmartHopperMask non valido";
       return false;
     }
   }
@@ -3196,6 +3217,8 @@ bool WebServerService::parseSettingsFromRequest(AppSettings& out, String& messag
       sanitizeHopperModelAssignmentMask((uint8_t)hopperAzkoyenDiscriminatorMask);
   out.hopperAlbericiEvolutionMask =
       sanitizeHopperModelAssignmentMask((uint8_t)hopperAlbericiEvolutionMask);
+  out.hopperSmartHopperMask =
+      sanitizeHopperModelAssignmentMask((uint8_t)hopperSmartHopperMask);
   out.billValidatorMd100Mask =
       sanitizeBillValidatorModelAssignmentMask((uint16_t)billValidatorMd100Mask);
   out.billValidatorSmartPayoutMask =

@@ -58,10 +58,11 @@ void printMoneyCents(Stream& out, uint32_t cents) {
 }
 
 void printSmartPayoutRoute(Stream& out, uint8_t route) {
+  // Manuale CC2 (Set/Get Routing): 0 = payout store, 1 = cashbox.
   if (route == 0) {
-    out.print(F("cashbox"));
-  } else if (route == 1) {
     out.print(F("payout"));
+  } else if (route == 1) {
+    out.print(F("cashbox"));
   } else {
     out.print(F("code "));
     out.print(route);
@@ -73,10 +74,15 @@ const __FlashStringHelper* smartPayoutStatusLabel(uint8_t code) {
     case 0x00: return F("idle");
     case 0x01: return F("dispensing");
     case 0x02: return F("dispensed");
+    case 0x06: return F("halted");
     case 0x07: return F("floating");
     case 0x08: return F("floated");
+    case 0x09: return F("timeout");
     case 0x0A: return F("incomplete payout");
     case 0x0B: return F("incomplete float");
+    case 0x0E: return F("emptying");
+    case 0x0F: return F("emptied");
+    case 0x10: return F("fraud attempt");
     case 0x11: return F("disabled");
     case 0x12: return F("note stored");
     case 0x13: return F("slave reset");
@@ -95,6 +101,10 @@ const __FlashStringHelper* smartPayoutStatusLabel(uint8_t code) {
     case 0x20: return F("cashbox replaced");
     case 0x27: return F("smart emptying");
     case 0x28: return F("smart emptied");
+    case 0x30: return F("error during payout");
+    case 0x31: return F("payout jam recovery");
+    case 0x32: return F("startup initialisation active");
+    case 0x33: return F("all channels inhibited");
     case 0x34: return F("barcode escrow");
     case 0x35: return F("barcode stacked");
     case 0x39: return F("bill held in bezel");
@@ -718,8 +728,11 @@ void CcTalkBillValidator::printRequestPayload(Stream& out, const CcTalkFrame& re
         out.print(F("  payload mode=0x"));
         if (mode < 16) out.print('0');
         out.print(mode, HEX);
-        out.print(F(" stacker="));
-        out.print((mode & 0x01) ? F("on") : F("off"));
+        // Smart Payout (CC2): bit 0 non usato, solo bit 1 = escrow.
+        if (!usesSmartPayoutValueCommands()) {
+          out.print(F(" stacker="));
+          out.print((mode & 0x01) ? F("on") : F("off"));
+        }
         out.print(F(" escrow="));
         out.println((mode & 0x02) ? F("on") : F("off"));
       }
@@ -1096,6 +1109,8 @@ void CcTalkBillValidator::accumulateAcceptedBills(BillValidatorState& state, con
 uint8_t CcTalkBillValidator::smartPayoutStatusDataLen(uint8_t code) const {
   switch (code) {
     case 0x00:
+    case 0x0E:
+    case 0x0F:
     case 0x11:
     case 0x12:
     case 0x13:
@@ -1108,22 +1123,32 @@ uint8_t CcTalkBillValidator::smartPayoutStatusDataLen(uint8_t code) const {
     case 0x1E:
     case 0x1F:
     case 0x20:
+    case 0x31:
+    case 0x32:
+    case 0x33:
     case 0x34:
     case 0x35:
       return 0;
 
-    case 0x01:
-    case 0x02:
-    case 0x07:
-    case 0x08:
+    // Incomplete payout/float: valore erogato + valore richiesto (manuale CC2).
     case 0x0A:
     case 0x0B:
+      return 8;
+
+    case 0x01:
+    case 0x02:
+    case 0x06:
+    case 0x07:
+    case 0x08:
+    case 0x09:
+    case 0x10:
     case 0x14:
     case 0x15:
     case 0x1C:
     case 0x1D:
     case 0x27:
     case 0x28:
+    case 0x30:
     case 0x39:
     case 0x3C:
       return 4;
@@ -1912,6 +1937,10 @@ void CcTalkBillValidator::printResponse(Stream& out, uint8_t hostHdr, const CcTa
             out.print(F(" value="));
             printMoneyCents(out, readU32LE(&resp.data[pos]));
           }
+          if (extraLen >= 8) {
+            out.print(F(" requested="));
+            printMoneyCents(out, readU32LE(&resp.data[pos + 4]));
+          }
           out.println();
           pos = (uint8_t)(pos + extraLen);
         }
@@ -1989,8 +2018,10 @@ void CcTalkBillValidator::printResponse(Stream& out, uint8_t hostHdr, const CcTa
         out.print(F("mode=0x"));
         if (mode < 16) out.print('0');
         out.print(mode, HEX);
-        out.print(F(" stacker="));
-        out.print((mode & 0x01) ? F("on") : F("off"));
+        if (!usesSmartPayoutValueCommands()) {
+          out.print(F(" stacker="));
+          out.print((mode & 0x01) ? F("on") : F("off"));
+        }
         out.print(F(" escrow="));
         out.println((mode & 0x02) ? F("on") : F("off"));
       } else {

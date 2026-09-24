@@ -44,6 +44,14 @@ const HopperDataset kAzkoyenDiscriminatorDataset(
     2,
     4,
     HOPPER_STATUS_MODE_AZKOYEN_TYPE1_PAYOUT_COUNTER);
+
+// ITL Smart Hopper (protocollo CC2, manuale GA863): multimoneta, i tagli sono
+// dichiarati dal device via Get Device Setup (0x1C/0x2E) e i valori erogati
+// arrivano gia in centesimi negli eventi di stato, quindi nessun valore base.
+const HopperDataset kSmartHopperDataset(
+    "ITL_SMART_HOPPER",
+    HOPPER_CUSTOM_COMMANDS_ITL_SMART_HOPPER,
+    false);
 } // namespace
 
 const HopperDataset& hopperDatasetAlbericiDiscriminator() {
@@ -64,4 +72,8 @@ const HopperDataset& hopperDatasetSuzoEvolution() {
 
 const HopperDataset& hopperDatasetAzkoyenDiscriminator() {
   return kAzkoyenDiscriminatorDataset;
+}
+
+const HopperDataset& hopperDatasetSmartHopper() {
+  return kSmartHopperDataset;
 }

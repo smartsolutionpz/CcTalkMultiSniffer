@@ -6,7 +6,10 @@
 
 enum HopperCustomCommandMode : uint8_t {
   HOPPER_CUSTOM_COMMANDS_NONE = 0,
-  HOPPER_CUSTOM_COMMANDS_AZKOYEN_DISCRIMINATOR = 1
+  HOPPER_CUSTOM_COMMANDS_AZKOYEN_DISCRIMINATOR = 1,
+  // Protocollo ITL CC2 (Smart Hopper): payout per valore (0x16/0x27/0x20/0x2C)
+  // ed eventi via Request Status (0x1D/0x2F), niente 0xA7/0xA6/0xAB.
+  HOPPER_CUSTOM_COMMANDS_ITL_SMART_HOPPER = 2
 };
 
 enum HopperStatusMode : uint8_t {
@@ -63,3 +66,4 @@ const HopperDataset& hopperDatasetAlbericiHopperCd();
 const HopperDataset& hopperDatasetAlbericiEvolution();
 const HopperDataset& hopperDatasetSuzoEvolution();
 const HopperDataset& hopperDatasetAzkoyenDiscriminator();
+const HopperDataset& hopperDatasetSmartHopper();
